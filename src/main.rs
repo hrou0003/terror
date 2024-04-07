@@ -28,12 +28,18 @@ fn decode_bencoded_value(encoded_value: &str) -> (serde_json::Value, &str) {
             let mut rest = encoded_value.split_at(1).1;
             while !rest.is_empty() && !rest.starts_with('e') {
                 let (key, remainder) = decode_bencoded_value(rest);
+                let key = match key {
+                    serde_json::Value::String(key) => key,
+                    key => {
+                        panic!("Dict keys must be strings, not {key:?}");
+                    }
+                };
                 let (value, remainder) = decode_bencoded_value(remainder);
                 values.insert(key.to_string(), value);
                 rest = remainder;
             }
 
-            return (serde_json::Value::Object(values), &rest[1..])
+            return (values.into(), &rest[1..])
 
         },
         Some('l') => {
