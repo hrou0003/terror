@@ -1,5 +1,5 @@
-use serde_json;
-use std::env;
+use serde_json::{self, Map};
+use std::{collections::HashMap, env};
 
 // Available if you need it!
 // use serde_bencode
@@ -22,6 +22,19 @@ fn decode_bencoded_value(encoded_value: &str) -> (serde_json::Value, &str) {
             } else {
                 panic!("Invalid integer format");
             }
+        },
+        Some('d') => {
+            let mut values = Map::new();
+            let mut rest = encoded_value.split_at(1).1;
+            while !rest.is_empty() && !rest.starts_with('e') {
+                let (key, remainder) = decode_bencoded_value(rest);
+                let (value, remainder) = decode_bencoded_value(remainder);
+                values.insert(key.to_string(), value);
+                rest = remainder;
+            }
+
+            return (serde_json::Value::Object(values), &rest[1..])
+
         },
         Some('l') => {
             let mut values = Vec::new();
