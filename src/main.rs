@@ -5,19 +5,53 @@ use std::env;
 // use serde_bencode
 
 #[allow(dead_code)]
-fn decode_bencoded_value(encoded_value: &str) -> serde_json::Value {
-    if let Some(n) = encoded_value
-        .strip_prefix('i')
-        .and_then(|rest| rest.split_once('e'))
-        .and_then(|(digits, _)| digits.parse::<i64>().ok()) {
-            return n.into();
-        }
-    if let Some((len, rest)) = encoded_value.split_once(':') {
-        if let Ok(len) = len.parse::<usize>() {
-            return serde_json::Value::String(rest[..len].to_string());
-        }
-    } 
-    panic!("Unhandled encoded value: {}", encoded_value)
+fn decode_bencoded_value(encoded_value: &str) -> (serde_json::Value, &str) {
+    match encoded_value.chars().next() {
+        Some('i') => {
+            if let Some((n, rest)) =
+                encoded_value
+                    .split_at(1)
+                    .1
+                    .split_once('e')
+                    .and_then(|(digits, rest)| {
+                        let n = digits.parse::<i64>().ok()?;
+                        Some((n, rest))
+                    })
+            {
+                return (n.into(), rest);
+            } else {
+                panic!("Invalid integer format");
+            }
+        },
+        Some('l') => {
+            let mut values = Vec::new();
+            let mut rest = encoded_value.split_at(1).1;
+            while !rest.is_empty() && !rest.starts_with('e') {
+                let (value, remainder) = decode_bencoded_value(rest);
+                values.push(value);
+                rest = remainder;
+            }
+
+            return (values.into(), &rest[1..]);
+        },
+        Some('0'..='9') => {
+            let (len, rest) = match encoded_value.split_once(':') {
+                Some((len, rest)) => (len, rest),
+                None => panic!("Invalid string format")
+            };
+
+            let len = match len.parse::<usize>() {
+                Ok(len) => len,
+                Err(_) => panic!("Invalid string length"),
+            };
+        
+            if rest.len() < len {
+                panic!("String length exceeds available data");
+            }
+            return (rest[..len].into(), &rest[len..]);
+        },
+        _ => panic!("Unhandled encoded value: {}", encoded_value)
+    }
 }
 
 // Usage: your_bittorrent.sh decode "<encoded_value>"
@@ -31,8 +65,8 @@ fn main() {
 
         // Uncomment this block to pass the first stage
         let encoded_value = &args[2];
-        let decoded_value = decode_bencoded_value(encoded_value);
-        println!("{}", decoded_value.to_string());
+        let (value, _) = decode_bencoded_value(encoded_value);
+        println!("{}", value.to_string());
     } else {
         eprintln!("unknown command: {}", args[1])
     }
