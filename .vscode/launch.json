@@ -38,7 +38,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["info", "/tmp/torrents1290784742/itsworking.gif.torrent"],
+            "args": ["info", "output.torrent"],
             "cwd": "${workspaceFolder}"
         },
         {

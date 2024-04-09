@@ -56,7 +56,7 @@ pub fn decode_bencoded_value(encoded_value: Vec<u8>) -> (serde_json::Value, Vec<
                 Ok(len) => len,
                 Err(_) => panic!("Invalid string length"),
             };
-        
+
             if rest.len() < len + 1 {
                 panic!("String length exceeds available data");
             };

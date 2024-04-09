@@ -12,30 +12,30 @@ pub struct Torrent {
 #[derive(Clone, Debug, Deserialize)]
 pub struct Info {
     // size of the file in bytes, for single-file torrents
-    pub length: u64,
+    pub length: i64,
     // suggested name to save the file / directory as
     pub name: String,
     // number of bytes in each piece
     #[serde(rename = "piece length")]
-    pub piece_length: u64,
+    pub piece_length: i64,
     // concatenated SHA-1 hashes of each piece
     pub pieces: Vec<u8>,
 }
 
 pub fn parse_file(file_path: String) -> Torrent {
     let file = fs::read(file_path).expect("bad file");
-    println!("{:?}", file);
+    // println!("{:?}", file);
 
     let (parsed_value, _) = decode_bencoded_value(file);
 
     let announce = parsed_value["announce"].as_str().expect("Invalid URL").to_string();
     let info = &parsed_value["info"];
-    let length = &info["length"].as_str().expect("Invalid length").to_string();
+    let length = &info["length"].as_i64();
 
     let info = Info {
-        length: length.parse::<u64>().expect("Invalid length"),
+        length: length.expect("Invalid length"),
         name: info["name"].as_str().expect("Invalid name").to_string(),
-        piece_length: info["piece length"].as_str().expect("Invalid piece length").to_string().parse::<u64>().expect("Pieces length is not an integer"),
+        piece_length: info["piece length"].as_i64().expect("Invalid piece length"),
         pieces: info["pieces"].as_str().expect("Invalid pieces").as_bytes().to_vec()
     };
 
