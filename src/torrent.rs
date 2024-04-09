@@ -23,9 +23,10 @@ pub struct Info {
 }
 
 pub fn parse_file(file_path: String) -> Torrent {
-    let file = fs::read(file_path);
+    let file = fs::read(file_path).expect("bad file");
+    println!("{:?}", file);
 
-    let (parsed_value, _) = decode_bencoded_value(file.unwrap());
+    let (parsed_value, _) = decode_bencoded_value(file);
 
     let announce = parsed_value["announce"].as_str().expect("Invalid URL").to_string();
     let info = &parsed_value["info"];
