@@ -3,7 +3,7 @@ use serde_json::Map;
 
 #[allow(dead_code)]
 pub fn decode_bencoded_value(encoded_value: Vec<u8>) -> (serde_json::Value, Vec<u8>) {
-    match encoded_value.first() {
+    match encoded_value.iter().next() {
         Some(b'i') => {
             match encoded_value
                             .split_at(1)
@@ -51,17 +51,20 @@ pub fn decode_bencoded_value(encoded_value: Vec<u8>) -> (serde_json::Value, Vec<
         Some(b'0'..=b'9') => {
             let colon_position = encoded_value.iter().position(|&byte| byte == b':').unwrap_or(encoded_value.len() - 1);
             let (len, rest) = encoded_value.split_at(colon_position);
-
-            let len: String = from_utf8(&len).expect("Invalid string length").parse().expect("Invalid string length");
+            let len: &str = from_utf8(&len).expect("Invalid string length");
             let len = match len.parse::<usize>() {
                 Ok(len) => len,
                 Err(_) => panic!("Invalid string length"),
             };
         
-            if rest.len() < len {
+            if rest.len() < len + 1 {
                 panic!("String length exceeds available data");
-            }
-            return (rest[..len].into(), rest[len..].to_vec());
+            };
+        
+            let bytes = &rest[1..len+1];
+            let chars: Vec<char> = bytes.iter().map(|&b| b as char).collect();
+            let string: &str = &chars.iter().collect::<String>();
+            return (serde_json::Value::String(string.to_string()), rest[len+1..].to_vec());
         },
         _ => panic!("Unhandled encoded value: {:?}", encoded_value)
     }

@@ -29,11 +29,12 @@ pub fn parse_file(file_path: String) -> Torrent {
 
     let announce = parsed_value["announce"].as_str().expect("Invalid URL").to_string();
     let info = &parsed_value["info"];
+    let length = &info["length"].as_str().expect("Invalid length").to_string();
 
     let info = Info {
-        length: info["length"].as_u64().expect("Invalid length"),
+        length: length.parse::<u64>().expect("Invalid length"),
         name: info["name"].as_str().expect("Invalid name").to_string(),
-        piece_length: info["piece_length"].as_u64().expect("Invalid piece length"),
+        piece_length: info["piece length"].as_str().expect("Invalid piece length").to_string().parse::<u64>().expect("Pieces length is not an integer"),
         pieces: info["pieces"].as_str().expect("Invalid pieces").as_bytes().to_vec()
     };
 
