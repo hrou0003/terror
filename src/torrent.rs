@@ -1,15 +1,16 @@
 use std::fs;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha1::{digest::generic_array::GenericArray, Digest, Sha1};
 use crate::decoder::decode_bencoded_value;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Torrent {
     // URL to a "tracker", which is a central server that keeps track of peers participating in the sharing of a torrent.
     pub announce: String,
     pub info: Info,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Info {
     // size of the file in bytes, for single-file torrents
     pub length: i64,
@@ -45,5 +46,14 @@ pub fn parse_file(file_path: String) -> Torrent {
     };
 
     return torrent;
+}
 
+pub fn calculate_info_hash(info: &Info) -> [u8; 20] {
+    let info_raw = serde_bencode::to_bytes(&info).expect("Invalid info dictionary");
+
+    let mut hasher = Sha1::new();
+
+    hasher.update(info_raw);
+    
+    return hasher.finalize().into();
 }

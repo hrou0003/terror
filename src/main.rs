@@ -1,6 +1,6 @@
 use std::env;
 
-use bittorrent_starter_rust::torrent::parse_file;
+use bittorrent_starter_rust::torrent::{calculate_info_hash, parse_file};
 use bittorrent_starter_rust::decoder::decode_bencoded_value;
 
 
@@ -17,9 +17,10 @@ fn main() {
     } else if command == "info" {
         let file_path = &args[2];
         let torrent = parse_file(file_path.to_string());
+        let info_hash = calculate_info_hash(&torrent.info);
         println!(
-            "Tracker URL: {}, Length: {}",
-            torrent.announce, torrent.info.length
+            "Tracker URL: {}, Length: {}, Info Hash: {}",
+            torrent.announce, torrent.info.length, hex::encode(info_hash)
         )
     } else {
         eprintln!("unknown command: {}", args[1])
