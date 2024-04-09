@@ -1,12 +1,7 @@
 use std::env;
 
-use bittorrent_starter_rust::{torrent::{Torrent, Info, parse_file}};
+use bittorrent_starter_rust::torrent::parse_file;
 use bittorrent_starter_rust::decoder::decode_bencoded_value;
-use serde_json::{self, Map};
-
-// Available if you need it!
-// use serde_bencode
-
 
 
 // Usage: your_bittorrent.sh decode "<encoded_value>"
