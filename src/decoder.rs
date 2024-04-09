@@ -11,7 +11,7 @@ pub fn decode_bencoded_value(encoded_value: Vec<u8>) -> (serde_json::Value, Vec<
                             .split_at(encoded_value[1..].iter().position(|&b| b == b'e').unwrap_or(encoded_value.len() - 1)) {
                 (digits, rest) => {
                     let n: String = std::str::from_utf8(digits).expect("Invalid integer format").parse().expect("Invalid integer format");
-                    return (n.parse::<u64>().expect("Invalid integer").into(), rest[1..].to_vec());
+                    return (n.parse::<i64>().expect("Invalid integer").into(), rest[1..].to_vec());
                 }
                 _ => {
                             panic!("Invalid integer format");

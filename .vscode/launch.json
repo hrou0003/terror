@@ -38,7 +38,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["decode", "i938264321e"],
+            "args": ["decode", "i-52e"],
             "cwd": "${workspaceFolder}"
         },
         {
