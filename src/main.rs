@@ -21,7 +21,7 @@ fn main() {
         let file_path = &args[2];
         let torrent = parse_file(file_path.to_string());
         println!(
-            "Tracker URL: {}, Length: {}",
+            "Tracker URL: {}, Length: {:?}",
             torrent.announce, torrent.info.length.to_string()
         )
     } else {
