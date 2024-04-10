@@ -19,11 +19,20 @@ fn main() {
         let torrent = parse_file(file_path.to_string());
         let info_hash = calculate_info_hash(&torrent.info);
         println!(
-            "Tracker URL: {}\nLength: {}\nInfo Hash: {}",
+            "Tracker URL: {}\nLength: {}\nInfo Hash: {}\nPiece Length: {}\nPiece Hashes: ",
             torrent.announce,
             torrent.info.length,
-            hex::encode(info_hash)
+            hex::encode(info_hash),
+            torrent.info.piece_length
         );
+
+        let mut chunks = torrent.info.pieces.chunks_exact(20);
+        for chunk in &mut chunks {
+            println!("{}", hex::encode(chunk))
+        }
+
+        let remainder = chunks.remainder();
+        println!("{}", hex::encode(remainder))
     } else {
         eprintln!("unknown command: {}", args[1])
     }
