@@ -38,7 +38,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["info", "output.torrent"],
+            "args": ["info", "sample.torrent"],
             "cwd": "${workspaceFolder}"
         },
         {

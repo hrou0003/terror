@@ -19,9 +19,11 @@ fn main() {
         let torrent = parse_file(file_path.to_string());
         let info_hash = calculate_info_hash(&torrent.info);
         println!(
-            "Tracker URL: {}, Length: {}, Info Hash: {}",
-            torrent.announce, torrent.info.length, hex::encode(info_hash)
-        )
+            "Tracker URL: {}\nLength: {}\nInfo Hash: {}",
+            torrent.announce,
+            torrent.info.length,
+            hex::encode(info_hash)
+        );
     } else {
         eprintln!("unknown command: {}", args[1])
     }

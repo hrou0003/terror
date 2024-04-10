@@ -1,5 +1,6 @@
 use std::fs;
 use serde::{Deserialize, Serialize};
+use serde_bytes::ByteBuf;
 use sha1::{digest::generic_array::GenericArray, Digest, Sha1};
 use crate::decoder::decode_bencoded_value;
 
@@ -13,43 +14,33 @@ pub struct Torrent {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Info {
     // size of the file in bytes, for single-file torrents
-    pub length: i64,
+    #[serde(default)]
+    pub length: usize,
     // suggested name to save the file / directory as
     pub name: String,
     // number of bytes in each piece
     #[serde(rename = "piece length")]
-    pub piece_length: i64,
+    pub piece_length: usize,
     // concatenated SHA-1 hashes of each piece
-    pub pieces: Vec<u8>,
+    pub pieces: ByteBuf,
 }
 
 pub fn parse_file(file_path: String) -> Torrent {
     let file = fs::read(file_path).expect("bad file");
     // println!("{:?}", file);
 
-    let (parsed_value, _) = decode_bencoded_value(file);
-
-    let announce = parsed_value["announce"].as_str().expect("Invalid URL").to_string();
-    let info = &parsed_value["info"];
-    let length = &info["length"].as_i64();
-
-    let info = Info {
-        length: length.expect("Invalid length"),
-        name: info["name"].as_str().expect("Invalid name").to_string(),
-        piece_length: info["piece length"].as_i64().expect("Invalid piece length"),
-        pieces: info["pieces"].as_str().expect("Invalid pieces").as_bytes().to_vec()
-    };
-
-    let torrent = Torrent {
-        announce: announce,
-        info: info
-    };
+    let torrent : Torrent = serde_bencode::de::from_bytes(&file).expect("Invalid torrent file");
 
     return torrent;
 }
 
 pub fn calculate_info_hash(info: &Info) -> [u8; 20] {
     let info_raw = serde_bencode::to_bytes(&info).expect("Invalid info dictionary");
+
+
+    let decoded = serde_bencode::from_bytes::<Info>(&info_raw).expect("Bad info");
+
+    println!("{:?}", decoded);
 
     let mut hasher = Sha1::new();
 
