@@ -38,7 +38,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["peers", "sample.torrent"],
+            "args": ["handshake", "sample.torrent", "178.62.85.20:51489"],
             "cwd": "${workspaceFolder}"
         },
         {

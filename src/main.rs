@@ -2,7 +2,7 @@ use std::env;
 
 use bittorrent_starter_rust::torrent::{calculate_info_hash, parse_file};
 use bittorrent_starter_rust::decoder::decode_bencoded_value;
-use bittorrent_starter_rust::client::get_peers;
+use bittorrent_starter_rust::client::{get_peers, handshake};
 
 
 // Usage: your_bittorrent.sh decode "<encoded_value>"
@@ -45,6 +45,12 @@ async fn main() {
         for peer in peers {
             println!("{}:{}", peer.ip, peer.port.to_string())
         }
+    }
+    "handshake" => {
+        let file_path = &args[2];
+        let peer_address = &args[3];
+
+        handshake(file_path.to_string(), peer_address).await.expect("Couldn't perform handshake");
     }
     _ => eprintln!("unknown command: {}", args[1])
     }
