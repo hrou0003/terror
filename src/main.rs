@@ -1,13 +1,16 @@
 use std::env;
+use anyhow;
 
+use bittorrent_starter_rust::client::download;
+use bittorrent_starter_rust::client::tracking::get_peers;
+use bittorrent_starter_rust::client::handshake::Handshake;
 use bittorrent_starter_rust::torrent::{calculate_info_hash, parse_file};
 use bittorrent_starter_rust::decoder::decode_bencoded_value;
-use bittorrent_starter_rust::client::{get_peers, handshake};
 
 
 // Usage: your_bittorrent.sh decode "<encoded_value>"
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
     let command = args[1].as_str();
 
@@ -40,7 +43,9 @@ async fn main() {
     }
     "peers" => {
         let file_path = &args[2];
-        let peers = get_peers(file_path).await.expect("Peers couldn't be found");
+        let torrent = parse_file(file_path.to_string());
+
+        let peers = get_peers(&torrent).await.expect("Peers couldn't be found");
 
         for peer in peers {
             println!("{}:{}", peer.ip, peer.port.to_string())
@@ -50,8 +55,23 @@ async fn main() {
         let file_path = &args[2];
         let peer_address = &args[3];
 
-        handshake(file_path.to_string(), peer_address).await.expect("Couldn't perform handshake");
+        let torrent = parse_file(file_path.to_string());
+
+        let mut stream = tokio::net::TcpStream::connect(peer_address).await?;
+
+        Handshake::do_handshake(&torrent, &mut stream).await.expect("Couldn't perform handshake");
+    }
+    "download_piece" => {
+        let output_path = &args[2];
+        let file_path = &args[3];
+        let piece_index = &args[4];
+
+        let torrent = parse_file(file_path.to_string());
+
+        let piece = download::Message::download_piece(&torrent, piece_index.parse::<usize>()?).await?;
     }
     _ => eprintln!("unknown command: {}", args[1])
     }
+
+    Ok(())
 }

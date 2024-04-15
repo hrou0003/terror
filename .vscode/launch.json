@@ -38,7 +38,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["handshake", "sample.torrent", "178.62.85.20:51489"],
+            "args": ["download_piece", "test-piece", "sample.torrent", "0"],
             "cwd": "${workspaceFolder}"
         },
         {
