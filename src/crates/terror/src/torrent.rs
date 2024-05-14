@@ -69,7 +69,38 @@ impl Torrent {
     pub async fn download(&mut self) -> Result<Vec<u8>, anyhow::Error> {
 
         let mut piece_pool = PiecePool::new(&self);
+        let peer_metrics = Arc::new(Mutex::new(BinaryHeap::new()));
         let peer_pool = Peer::get_peers(&self).await?;
+
+        for peer in peer_pool.peers {
+            peer_metrics.lock().await.push(PeerMetrics {
+                peer,
+                download_speed: 0.0,
+                successful_downloads: 0,
+                failed_downloads: 0,
+            });
+        }
+
+        let (metric_sender, mut metric_receiver) = mpsc::channel(Self::MAX_CONCURRENT);
+        
+        let peer_metrics_ = peer_metrics.clone();
+
+        tokio::spawn(async move {
+            while let Some(peer_metric) = metric_receiver.recv().await {
+                // Update peer metrics in the priority queue
+                // You can use a mutex or a lock-free data structure for thread safety
+                // Here, we assume peer_metrics is safely shared among tasks
+                peer_metrics_.lock().await.push(peer_metric);
+            }
+        });
+
+
+        let peer_metrics_clone = peer_metrics.clone();
+        tokio::spawn(print_statistics(peer_metrics_clone));
+
+        // let (speed_sender, speed_receiver) = mpsc::channel(100);
+
+        // tokio::spawn(update_speed_display(speed_receiver));
 
         let semaphore = Arc::new(Semaphore::new(Self::MAX_CONCURRENT));
         let mut set = JoinSet::new();
@@ -77,18 +108,49 @@ impl Torrent {
         let torrent_info_hash = self.calculate_info_hash();
 
         for piece in &mut piece_pool.pieces {
+            let metric_sender = metric_sender.clone();
             let semaphore = semaphore.clone();
             let piece = piece.clone();
-            let peer = peer_pool.get_free_peer().await?;
+            let peer_metrics = peer_metrics.clone();
 
             set.spawn(async move {
                 let _permit = semaphore.acquire().await;
+                let mut retries = 0;
 
-                Self::download_piece_from_peer(torrent_info_hash.clone(), peer.clone(), piece.clone()).await
+                while retries < Self::MAX_RETRIES {
+                    if let Some(peer_metric) = peer_metrics.lock().await.pop() {
+                        eprintln!("Retries: {} for piece {} with peer {}", retries, piece.lock().await.index, peer_metric.peer.clone().read().await.id);
+                        let start_time = Instant::now();
+                        match Self::download_piece_from_peer(torrent_info_hash.clone(), peer_metric.peer.clone(), piece.clone()).await {
+                            Ok(()) => {
+                                let download_time = start_time.elapsed();
+                                let download_speed = (piece.lock().await.blocks.len() * 16384) as f64 / download_time.as_secs_f64();
+                                metric_sender.send(PeerMetrics {
+                                    peer: peer_metric.peer,
+                                    download_speed,
+                                    successful_downloads: peer_metric.successful_downloads + 1,
+                                    failed_downloads: peer_metric.failed_downloads,
+                                }).await.unwrap();
+                                return Ok(());
+                            }
+                            Err(_) => {
+                                retries += 1;
+                                metric_sender.send(PeerMetrics {
+                                    peer: peer_metric.peer,
+                                    download_speed: peer_metric.download_speed,
+                                    successful_downloads: peer_metric.successful_downloads,
+                                    failed_downloads: peer_metric.failed_downloads + 1,
+                                }).await.unwrap();
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                }
 
+                Err(anyhow::anyhow!("Failed to download piece after {} retries", Self::MAX_RETRIES))
             });
         }
-                
         while let Some(res) = set.join_next().await {
             match res {
                 Ok(Ok(piece)) => {},
@@ -166,6 +228,9 @@ impl Torrent {
         }
     }
 
+
+    async fn update_speed_display(mut receiver: mpsc::Receiver<Block>) {
+    }
 }
 
 
