@@ -1,11 +1,8 @@
 use std::env;
 use anyhow;
 
-use bittorrent_starter_rust::client::download;
-use bittorrent_starter_rust::client::tracking::get_peers;
-use bittorrent_starter_rust::client::handshake::Handshake;
-use bittorrent_starter_rust::torrent::{calculate_info_hash, parse_file};
 use bittorrent_starter_rust::decoder::decode_bencoded_value;
+use tokio::fs;
 
 
 // Usage: your_bittorrent.sh decode "<encoded_value>"
@@ -23,8 +20,8 @@ async fn main() -> anyhow::Result<()> {
     }
     "info" => {
         let file_path = &args[2];
-        let torrent = parse_file(file_path.to_string());
-        let info_hash = calculate_info_hash(&torrent.info);
+        let mut torrent = Torrent::new(file_path.to_string());
+        let info_hash = torrent.calculate_info_hash();
         println!(
             "Tracker URL: {}\nLength: {}\nInfo Hash: {}\nPiece Length: {}\nPiece Hashes: ",
             torrent.announce,
@@ -43,11 +40,11 @@ async fn main() -> anyhow::Result<()> {
     }
     "peers" => {
         let file_path = &args[2];
-        let torrent = parse_file(file_path.to_string());
+        let mut torrent = Torrent::new(file_path.to_string());
 
-        let peers = get_peers(&torrent).await.expect("Peers couldn't be found");
+        let peers = Peer::get_peers(&mut torrent).await.expect("Peers couldn't be found");
 
-        for peer in peers {
+        for peer in peers.get_connected_peers() {
             println!("{}:{}", peer.ip, peer.port.to_string())
         }
     }
@@ -55,20 +52,40 @@ async fn main() -> anyhow::Result<()> {
         let file_path = &args[2];
         let peer_address = &args[3];
 
-        let torrent = parse_file(file_path.to_string());
+        let mut torrent = Torrent::new(file_path.to_string());
 
         let mut stream = tokio::net::TcpStream::connect(peer_address).await?;
+        
+        let info_hash = torrent.calculate_info_hash();
 
-        Handshake::do_handshake(&torrent, &mut stream).await.expect("Couldn't perform handshake");
+        Handshake::handshake(info_hash, &mut stream).await.expect("Couldn't perform handshake");
     }
     "download_piece" => {
         let output_path = &args[2];
         let file_path = &args[3];
         let piece_index = &args[4];
 
-        let torrent = parse_file(file_path.to_string());
+        let mut torrent = Torrent::new(file_path.to_string());
+        
+        let mut peers = Peer::get_peers(&mut torrent).await.expect("Peers couldn't be found");
+        
+        let peer = peers.get_free_peer().expect("No free peers available");
 
-        let piece = download::Message::download_piece(&torrent, piece_index.parse::<usize>()?).await?;
+        let piece = Download::download_piece(torrent, peer, piece_index.parse::<usize>()?).await?;
+
+        fs::write(output_path, piece).await?;
+    }
+    "download" => {
+        let output_path = &args[2];
+        let file_path = &args[3];
+
+        let torrent = Torrent::new(file_path.to_string());
+
+        let mut download = Download::new(torrent).await?;
+        let downloaded_torrent = download.download().await?;
+
+        fs::write(output_path, downloaded_torrent).await?; 
+        eprintln!("Downloaded torrent to {output_path}")
     }
     _ => eprintln!("unknown command: {}", args[1])
     }

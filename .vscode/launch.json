@@ -38,7 +38,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["download_piece", "test-piece", "sample.torrent", "0"],
+            "args": ["download", "test-piece", "sample.torrent"],
             "cwd": "${workspaceFolder}"
         },
         {

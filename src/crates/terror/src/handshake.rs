@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::torrent::{calculate_info_hash, Torrent};
+use crate::torrent::{Torrent};
 
 #[derive(Serialize, Deserialize)]
-pub struct Handshake {
+pub(crate) struct Handshake {
     pub length: u8,
     pub bittorrent: [u8; 19],
     pub reserved: [u8; 8],
@@ -93,10 +93,7 @@ impl Handshake {
         })
     }
 
-
-    pub async fn do_handshake(torrent: &Torrent, stream: &mut tokio::net::TcpStream) -> anyhow::Result<Handshake> {
-
-        let info_hash = calculate_info_hash(&torrent.info);
+    pub(crate) async fn handshake(info_hash: [u8; 20], stream: &mut tokio::net::TcpStream) -> anyhow::Result<Handshake> {
 
         let peer_id: [u8; 20] = *b"00112233445566778899";
         let mut handshake = Handshake::new(info_hash, peer_id);
@@ -112,4 +109,3 @@ impl Handshake {
         Ok(received_handshake)
     }
 }
-
