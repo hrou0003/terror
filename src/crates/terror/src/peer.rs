@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{RwLock};
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
+use regex::Match;
 use serde_bytes::ByteBuf;
 use tokio::net::TcpStream;
 use uuid::Uuid;
@@ -114,10 +115,12 @@ impl Peer {
     pub async fn create_client(&mut self, info_hash: [u8; 20]) -> Result<()> {
         let mut stream = TcpStream::connect(format!("{}:{}", self.ip, self.port)).await?;
         Handshake::handshake(info_hash, &mut stream).await?;
-        let message = Message::read_message(&mut stream).await?;
-        if message == Message::Bitfield {
-            let request = Message::Interested;
-            Message::send_message(request, &mut stream).await?;
+        match Message::read_message(&mut stream).await? {
+            Message::Bitfield => {
+                let request = Message::Interested;
+                Message::send_message(request, &mut stream).await?;
+            },
+            _ => return Err(anyhow::anyhow!("Didn't receive bitfield")),
         }
         match Message::read_message(&mut stream).await? {
             Message::Unchoke => {

@@ -1,5 +1,8 @@
+use std::collections::BinaryHeap;
 use std::fs;
+use std::os::unix::raw::mode_t;
 use std::sync::{Arc};
+use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use sha1::{digest::generic_array::GenericArray, Digest, Sha1};
@@ -9,6 +12,7 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 use crate::download::{Block, BlockState, Message, Piece, PiecePool, PieceState};
 use crate::handshake::Handshake;
+use crate::metrics::PeerMetrics;
 use crate::peer::{Peer, PeerState};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -34,8 +38,8 @@ pub struct Info {
 
 
 impl Torrent {
-    const MAX_CONNECTIONS: usize = 4;
-    pub const MAX_CONCURRENT: usize = 3;
+    pub const MAX_CONCURRENT: usize = 4;
+    pub const MAX_RETRIES: usize = 2;
 
     pub fn new(file_path: String) -> Torrent {
         let file = fs::read(file_path).expect("bad file");
@@ -64,12 +68,8 @@ impl Torrent {
 
     pub async fn download(&mut self) -> Result<Vec<u8>, anyhow::Error> {
 
-        let peer_pool = Peer::get_peers(&self).await?;
         let mut piece_pool = PiecePool::new(&self);
-
-        // let (speed_sender, speed_receiver) = mpsc::channel(100);
-
-        // tokio::spawn(update_speed_display(speed_receiver));
+        let peer_pool = Peer::get_peers(&self).await?;
 
         let semaphore = Arc::new(Semaphore::new(Self::MAX_CONCURRENT));
         let mut set = JoinSet::new();
@@ -77,18 +77,18 @@ impl Torrent {
         let torrent_info_hash = self.calculate_info_hash();
 
         for piece in &mut piece_pool.pieces {
-            let peer = peer_pool.get_free_peer().await?.clone();
-
             let semaphore = semaphore.clone();
             let piece = piece.clone();
+            let peer = peer_pool.get_free_peer().await?;
 
             set.spawn(async move {
                 let _permit = semaphore.acquire().await;
-                Torrent::download_piece(torrent_info_hash.clone(), peer, piece).await
+
+                Self::download_piece_from_peer(torrent_info_hash.clone(), peer.clone(), piece.clone()).await
+
             });
         }
-
-
+                
         while let Some(res) = set.join_next().await {
             match res {
                 Ok(Ok(piece)) => {},
@@ -99,43 +99,34 @@ impl Torrent {
 
         let mut torrent_data = Vec::new();
 
-        // for piece in &mut piece_pool.pieces {
-        //     let piece = piece.lock().await;
-        //     match &piece.piece_state {
-        //         PieceState::Downloaded { piece_bytes } => torrent_data.extend_from_slice(piece_bytes),
-        //         _ => return Err(anyhow::anyhow!("Piece not downloaded")),
-        //     }
-        // }
+        for piece in &mut piece_pool.pieces {
+            let piece = piece.lock().await;
+            match &piece.piece_state {
+                PieceState::Downloaded { piece_bytes } => torrent_data.extend_from_slice(piece_bytes),
+                _ => return Err(anyhow::anyhow!("Piece not downloaded")),
+            }
+        }
 
         Ok(torrent_data)
         
     }
 
-    async fn download_piece(torrent_info_hash: [u8; 20], peer: Arc<RwLock<Peer>>, piece: Arc<Mutex<Piece>>) -> anyhow::Result<()> {
-
+    async fn download_piece_from_peer(torrent_info_hash: [u8; 20], peer: Arc<RwLock<Peer>>, piece: Arc<Mutex<Piece>>) -> anyhow::Result<()> {
         let mut piece = piece.lock().await;
 
         let mut peer_write = peer.write().await;
-        let mut stream = TcpStream::connect(format!("{}:{}", peer_write.ip, peer_write.port)).await?;
-        Handshake::handshake(torrent_info_hash, &mut stream).await?;
-        let message = Message::read_message(&mut stream).await?;
-        if message == Message::Bitfield {
-            let request = Message::Interested;
-            Message::send_message(request, &mut stream).await?;
-        }
-        if Message::read_message(&mut stream).await? == Message::Unchoke {
+
+        let mut stream = match peer_write.create_client(torrent_info_hash).await {
+            Ok(()) => match &mut peer_write.state {
+                PeerState::Connected { stream } => stream,
+                _ => return Err(anyhow::anyhow!("Unexpected peer state")),
+            },
+            Err(e) => return Err(e),
         };
-        // let mut stream = match peer_write.create_client(torrent_info_hash).await {
-        //     Ok(()) => match &mut peer_write.state {
-        //         PeerState::Connected { stream } => stream,
-        //         _ => return Err(anyhow::anyhow!("Unexpected peer state")),
-        //     },
-        //     Err(e) => return Err(e),
-        // };
-        
+
         let index = piece.index;
 
-        for block_ in &piece.blocks {
+        for block_ in &mut piece.blocks {
             let start = Instant::now();
             let request = Message::Request {
                 index: index as u32,
@@ -152,31 +143,53 @@ impl Torrent {
                     begin: _,
                     block,
                 } => {
-                    // let elapsed = start.elapsed();
-                    // block_.block_state = BlockState::Downloaded { duration: elapsed, data: block };
+                    let elapsed = start.elapsed();
+                    block_.block_state = BlockState::Downloaded { duration: elapsed, data: block };
                 }
                 _ => {
-                    // block_.block_state = BlockState::Missing;
+                    block_.block_state = BlockState::Missing;
                 },
             };
         }
-        
-        // if piece.blocks.iter().all(|block| matches!(block.block_state, BlockState::Downloaded { .. })) {
-        //     let piece_bytes = piece.blocks.iter().fold(Vec::new(), |mut acc, block| {
-        //         if let BlockState::Downloaded { data, .. } = &block.block_state { acc.extend_from_slice(data) };
-        //         acc
-        //     });
-        //     piece.piece_state = PieceState::Downloaded { piece_bytes };
-        //     peer_write.state = PeerState::Disconnected;
-        // } else { 
-        //     piece.piece_state = PieceState::Missing;
-        // };
 
-        Ok(())
+        if piece.blocks.iter().all(|block| matches!(block.block_state, BlockState::Downloaded { .. })) {
+            let piece_bytes = piece.blocks.iter().fold(Vec::new(), |mut acc, block| {
+                if let BlockState::Downloaded { data, .. } = &block.block_state { acc.extend_from_slice(data) };
+                acc
+            });
+            piece.piece_state = PieceState::Downloaded { piece_bytes };
+            peer_write.state = PeerState::Disconnected;
+            Ok(())
+        } else {
+            piece.piece_state = PieceState::Missing;
+            Err(anyhow::anyhow!("Failed to download piece from peer"))
+        }
     }
 
+}
 
-    async fn update_speed_display(mut receiver: mpsc::Receiver<Block>) {
+
+async fn print_statistics(peer_metrics: Arc<Mutex<BinaryHeap<PeerMetrics>>>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(5)); // Adjust the interval as needed
+
+    loop {
+        interval.tick().await;
+
+        let peer_metrics = peer_metrics.lock().await;
+
+        let total_peers = peer_metrics.len();
+        let total_download_speed: f64 = peer_metrics.iter().map(|pm| pm.download_speed).sum();
+        let avg_download_speed = total_download_speed / total_peers as f64;
+        let total_successful_downloads: usize = peer_metrics.iter().map(|pm| pm.successful_downloads).sum();
+        let total_failed_downloads: usize = peer_metrics.iter().map(|pm| pm.failed_downloads).sum();
+
+        println!("=== Peer Statistics ===");
+        println!("Total Peers: {}", total_peers);
+        println!("Total Download Speed: {:.2} bytes/sec", total_download_speed);
+        println!("Average Download Speed: {:.2} bytes/sec", avg_download_speed);
+        println!("Total Successful Downloads: {}", total_successful_downloads);
+        println!("Total Failed Downloads: {}", total_failed_downloads);
+        println!();
     }
 }
 
