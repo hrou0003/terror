@@ -1,230 +1,101 @@
-use std::fmt::Debug;
-use std::ops::{Deref, DerefMut};
-use std::sync::{Arc};
-use std::time::Duration;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::{RwLock, Mutex}};
-use crate::torrent::Torrent;
+use std::sync::Arc;
+use std::time::Instant;
 
-const BLOCK_LENGTH : usize = 1 << 14;
+use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex, Semaphore};
+use tokio::task::JoinSet;
 
-#[derive(PartialEq, Debug)]
-pub(crate) enum Message {
-    Bitfield,
-    Interested,
-    Unchoke,
-    Request {
-        index: u32,
-        begin: u32,
-        length: u32,
-    },
-    Piece {
-        index: u32,
-        begin: u32,
-        block: Vec<u8>
-    }
+use crate::peer::{Peer, PeerPool};
+use crate::piece::{PiecePool, PieceState};
+use crate::Torrent;
+
+pub struct TorrentDownloader {
+    piece_pool: PiecePool,
+    peer_pool: PeerPool,
+    torrent: Torrent
 }
 
-impl Message {
-    fn type_byte(&self) -> u8 {
-        match self {
-            Message::Unchoke => 1,
-            Message::Interested => 2,
-            Message::Bitfield => 5,
-            Message::Request { .. } => 6,
-            Message::Piece { .. } => 7,
-        }
+#[derive(Clone)]
+pub struct DownloadTask {
+    piece_index: usize,
+    result_tx: Sender<Result<usize, anyhow::Error>>,
+}
+
+impl TorrentDownloader {
+    pub const MAX_CONCURRENT: usize = 1;
+    pub  const MAX_RETRIES: usize = 3;
+    pub async fn new(torrent: &Torrent) -> anyhow::Result<Self> {
+        let piece_pool = PiecePool::new(&torrent)?;
+        let peer_pool = PeerPool::new(torrent).await?;
+        let torrent = torrent.clone();
+
+        Ok(TorrentDownloader { piece_pool, peer_pool, torrent })
     }
 
-    fn encode(&self) -> anyhow::Result<Vec<u8>> {
-        let payload = match self {
-            Message::Unchoke | Message::Interested | Message::Bitfield => vec![],
-            Message::Request {
-                index,
-                begin,
-                length,
-            } => {
-                let mut buf = Vec::new();
-                buf.extend(index.to_be_bytes());
-                buf.extend(begin.to_be_bytes());
-                buf.extend(length.to_be_bytes());
-                buf
-            }
-            Message::Piece {
-                index,
-                begin,
-                block,
-            } => {
-                let mut buf = Vec::new();
-                buf.extend(index.to_be_bytes());
-                buf.extend(begin.to_be_bytes());
-                buf.extend(block);
-                buf
+    // Start download workers that will monitor the download channel.
+    pub async fn download(&mut self) -> Result<Vec<u8>, anyhow::Error> {
+
+        let semaphore = Arc::new(Semaphore::new(Self::MAX_CONCURRENT));
+        let mut set = JoinSet::new();
+
+        let torrent_info_hash = self.torrent.calculate_info_hash();
+
+        while let Some(piece) = self.piece_pool.get_next_piece_mut().await {
+            let semaphore = semaphore.clone();
+            let peer = self.peer_pool.get_best_peer_mut().await.unwrap();
+
+            set.spawn(async move {
+                let _permit = semaphore.acquire().await.unwrap(); // Proper unwrap for the semaphore acquire.
+                let mut retries = 0;
+
+                while retries < Self::MAX_RETRIES {
+                        let mut piece = piece.clone();
+                        let peer = peer.clone();
+                        // eprintln!("Retries: {} for piece {} with peer {}", retries, piece.index, peer.id);
+                        // Properly handle the result of download_piece and break if successful.
+                        if Peer::download_piece(peer, piece, torrent_info_hash).await.is_ok() {
+                            retries += 1;
+                            break;
+                        }
+                }
+            });
+        }
+
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok(()) => {},
+                Err(e) => eprintln!("Task failed: {e}"),
             }
         };
 
-        let mut buf = Vec::new();
-        buf.extend(((1 + payload.len()) as u32).to_be_bytes());
-        buf.push(self.type_byte());
-        buf.extend(payload);
-        Ok(buf)
-    }
-    
-    pub(crate) async fn send_message(message: Message, stream: &mut tokio::net::TcpStream) -> anyhow::Result<()> {
-        let payload = Self::encode(&message)?;
-        eprintln!("Sending message {}", message.type_byte());
-        stream.write(&payload).await?;
-        return Ok(());
-    }
+        let mut torrent_data = Vec::new();
 
+        // for piece in &mut self.piece_pool.pieces {
+        //     let (piece_index, piece) = piece;
+        //     let piece = piece.lock().await;
+        //     match &piece.piece_state {
+        //         PieceState::Downloaded { piece_bytes } => torrent_data.extend_from_slice(piece_bytes),
+        //         _ => return Err(anyhow::anyhow!("Piece not downloaded")),
+        //     }
+        // }
 
-    pub(crate) async fn read_message(stream: &mut tokio::net::TcpStream) -> anyhow::Result<Message> {
-        let mut length_bytes = [0; 4];
-
-        stream.read_exact(&mut length_bytes).await?;
-
-        while u32::from_be_bytes(length_bytes) == 0 {
-            stream.read_exact(&mut length_bytes).await?;
-        }
-
-        let message_type = stream.read_u8().await?;
-        
-        eprintln!("Reading message {}", message_type);
-
-        let len = u32::from_be_bytes(length_bytes) as usize;
-
-        let mut payload = match len {
-            0 => Vec::new(),
-            1 => Vec::new(),
-            _ => vec![0; len - 1],
-        };
-
-        stream.read_exact(&mut payload).await?;
-
-        return match message_type {
-            5 => Ok(Message::Bitfield),
-            2 => Ok(Message::Interested),
-            1 => Ok(Message::Unchoke),
-            6 => {
-                let index = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
-                let begin = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
-                let length = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]);
-                Ok(Message::Request { index, begin, length })
-            },
-            7 => {
-                let index = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
-                let begin = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
-                let block = payload[8..].to_vec();
-                Ok(Message::Piece { index, begin, block })
-            },
-            t => Err(anyhow::anyhow!("Unknown message type {t}")),
-        };
+        Ok(torrent_data)
 
     }
-}
 
-pub(crate) struct Piece {
-    pub(crate) index: usize,
-    pub(crate) length: usize,
-    pub(crate) piece_hash: Vec<u8>,
-    pub(crate) piece_state: PieceState,
-    pub(crate) blocks: Vec<Block>,
-    pub(crate) number_of_blocks: usize,
-}
-
-pub(crate) struct Block {
-    pub(crate) index: usize,
-    pub(crate) begin: usize,
-    pub(crate) block_size: usize,
-    pub(crate) block_state: BlockState,
-}
-
-pub(crate) enum BlockState {
-    Downloaded {
-        data: Vec<u8>,
-        duration: Duration,
-    },
-    Downloading,
-    Missing
-}
-
-pub(crate) enum PieceState {
-    Downloaded { piece_bytes: Vec<u8> },
-    Downloading,
-    Missing,
-}
-
-pub(crate) struct PiecePool {
-    pub(crate) pieces: Vec<Arc<Mutex<Piece>>>,
-    pub(crate) number_of_pieces: usize,
-}
-
-impl PiecePool {
-    pub(crate) fn new(torrent: &Torrent) -> PiecePool {
-        let number_of_pieces = torrent.get_number_of_pieces();
-        let block_size = 1 << 14;
-
-        let pieces = (0..number_of_pieces)
-            .map(|index| {
-                let length = if index == number_of_pieces - 1 {
-                    torrent.info.length % torrent.info.piece_length
-                } else {
-                    torrent.info.piece_length
-                };
-
-                let number_of_blocks = (length + block_size - 1) / block_size;
-
-                let blocks = (0..number_of_blocks)
-                    .map(|block_index| Block {
-                        index: block_index,
-                        begin: block_index * block_size,
-                        block_size: if block_index == number_of_blocks - 1 && index == number_of_pieces - 1 {
-                            length % block_size
-                        } else {
-                            block_size
-                        },
-                        block_state: BlockState::Missing
-                    })
-                    .collect();
-
-                Arc::new(Mutex::new(Piece {
-                    index,
-                    length,
-                    piece_hash: torrent.info.pieces[index * 20..(index + 1) * 20].to_vec(),
-                    piece_state: PieceState::Missing,
-                    blocks,
-                    number_of_blocks
-                }))
-            })
-            .collect();
-
-        PiecePool {
-            pieces,
-            number_of_pieces,
-        }
-    }
-    pub(crate) async fn get_free_piece(&self) -> Option<Arc<Mutex<Piece>>> {
-        for piece in &self.pieces {
-            let piece_guard = piece.lock().await;
-            match piece_guard.piece_state {
-                PieceState::Missing => return Some(piece.clone()),
-                _ => continue,
-            }
-        }
-        None
-    }
 }
 
 mod tests {
     use std::fs;
-    use crate::download::{Message};
-    use crate::Torrent;
-    
-    #[test]
-    fn test_encode() {
-        let message = Message::Request { index: 0, begin: 0, length: 1 };
-        let encoded = message.encode().expect("Couldn't encode message");
-        assert_eq!(encoded, vec![0, 0, 0, 13, 6, 0, 0, 0, 0, 0, 0, 1]);
-    }
-    
 
+    use crate::download::TorrentDownloader;
+    use crate::Torrent;
+
+    #[tokio::test]
+    async fn test_download() {
+        let torrent = Torrent::new("test/sample.torrent".to_string());
+        let output = TorrentDownloader::new(&torrent).await.unwrap().download().await.expect("Couldn't download torrent");
+        let correct_output = fs::read("test/sample_correct.txt").expect("Couldn't read correct output");
+        fs::write("test/output", &output).expect("Couldn't write output");
+        assert_eq!(output, correct_output);
+    }
 }

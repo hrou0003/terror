@@ -1,3 +1,5 @@
+extern crate core;
+
 pub fn add(left: usize, right: usize) -> usize {
     left + right
 }
@@ -9,8 +11,10 @@ pub use {
 
 pub(crate) mod handshake;
 pub(crate) mod peer;
-pub(crate) mod download;
+pub(crate) mod message;
 pub(crate) mod metrics;
+mod piece;
+mod download;
 
 
 #[cfg(test)]
