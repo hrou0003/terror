@@ -1,16 +1,17 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc};
 use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
+use regex::Match;
 use serde_bytes::ByteBuf;
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 use crate::message::Message;
 use crate::handshake::Handshake;
-use crate::piece::{BlockState, Piece, PieceState};
+use crate::piece::{Block, BlockState, Piece, PieceState};
 use crate::torrent::Torrent;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -37,7 +38,8 @@ pub struct Peer {
     pub port: u16,
     pub state: PeerState,
     pub peer_metrics: PeerMetrics,
-    pieces: HashSet<usize>,
+    pub pieces: HashSet<usize>,
+    pub  info_hash: [u8; 20],
 }
 
 #[derive(Debug)]
@@ -121,89 +123,161 @@ impl Peer {
         result
     }
 
-    pub async fn create_client(&mut self, info_hash: [u8; 20]) -> Result<()> {
+    pub async fn create_client(&mut self) -> Result<()> {
         let mut stream = TcpStream::connect(format!("{}:{}", self.ip, self.port)).await?;
-        Handshake::handshake(info_hash, &mut stream).await?;
-        match Message::read_message(&mut stream).await? {
-            Message::Bitfield => {
+        eprintln!("Sending handshake to {}:{}", self.ip, self.port);
+        match Handshake::handshake(self.info_hash, &mut stream).await {
+            Ok(_) => (),
+            Err(e) => return Err(e),
+        };
+        match Message::read_message(&mut stream).await {
+            Ok(Message::Bitfield { bitfield }) => {
+                self.process_bitfield(bitfield);
                 let request = Message::Interested;
                 Message::send_message(request, &mut stream).await?;
             }
             _ => return Err(anyhow::anyhow!("Didn't receive bitfield")),
         }
-        match Message::read_message(&mut stream).await? {
-            Message::Unchoke => {
+        match Message::read_message(&mut stream).await {
+            Ok(Message::Unchoke) => {
                 self.state = PeerState::Connected { stream };
                 Ok(())
             }
             _ => Err(anyhow::anyhow!("Didn't unchoke")),
         }
     }
-
-    pub async fn download_piece(
-        peer: Arc<RwLock<Peer>>,
-        piece: Arc<Mutex<Piece>>,
-        torrent_info_hash: [u8; 20],
-    ) -> anyhow::Result<()> {
-        let mut peer = peer.write().await;
-        let mut piece = piece.lock().await;
-        let stream = match peer.create_client(torrent_info_hash).await {
-            Ok(()) => match &mut peer.state {
-                PeerState::Connected { stream } => stream,
-                _ => return Err(anyhow::anyhow!("Unexpected peer state")),
-            },
-            Err(e) => return Err(e),
-        };
-
-        let index = piece.index;
-
-        for undownloaded_block in &mut piece.get_blocks_mut() {
-            let start = Instant::now();
-            let request = Message::Request {
-                index: index as u32,
-                begin: undownloaded_block.begin as u32,
-                length: undownloaded_block.block_size as u32,
-            };
-
-            Message::send_message(request, stream).await?;
-            match Message::read_message(stream).await? {
-                Message::Piece { block: block_bytes, .. } => {
-                    let elapsed = start.elapsed();
-                    undownloaded_block.block_state = BlockState::Downloaded {
-                        data: block_bytes,
-                        duration: elapsed,
-                    };
-                }
-                _ => {
-                    undownloaded_block.block_state = BlockState::Missing;
+    
+    fn process_bitfield(&mut self, bitfield: Vec<u8>) {
+        for (i, byte) in bitfield.iter().enumerate() {
+            for j in 0..8 {
+                if byte & (1 << (7 - j)) != 0 {
+                    let index = i * 8 + j;
+                    self.pieces.insert(index);
                 }
             }
         }
+    }
+    
+    pub fn piece_in_bitfield(&self, piece_index: usize) -> bool {
+        self.pieces.contains(&piece_index)
+    }
 
-        if piece
-            .blocks
-            .iter()
-            .all(|block| matches!(block.block_state, BlockState::Downloaded { .. }))
-        {
-            let piece_bytes = piece.blocks.iter().fold(Vec::new(), |mut acc, block| {
-                if let BlockState::Downloaded { data, .. } = &block.block_state {
-                    acc.extend_from_slice(data);
+    // pub async fn download_piece(
+    //     peer: Arc<RwLock<Peer>>,
+    //     piece: Arc<Mutex<Piece>>,
+    //     torrent_info_hash: [u8; 20],
+    // ) -> Result<()> {
+    //     // Acquire write lock on peer
+    //     let mut peer = peer.write().await;
+    // 
+    //     // Attempt to connect the peer using torrent info hash
+    //     let stream = match peer.create_client().await {
+    //         Ok(()) => match &mut peer.state {
+    //             PeerState::Connected { stream } => stream,
+    //             _ => return Err(anyhow::anyhow!("Unexpected peer state")),
+    //         },
+    //         Err(e) => return Err(e),
+    //     };
+    // 
+    //     // Acquire lock on piece
+    //     let mut piece = piece.lock().await;
+    // 
+    //     let index = piece.index;
+    // 
+    //     for undownloaded_block in &mut piece.blocks {
+    //         let start = Instant::now();
+    //         let request = Message::Request {
+    //             index: index as u32,
+    //             begin: undownloaded_block.begin as u32,
+    //             length: undownloaded_block.block_size as u32,
+    //         };
+    // 
+    //         Message::send_message(request, stream).await?;
+    // 
+    //         match Message::read_message(stream).await? {
+    //             Message::Piece {
+    //                 index: _,
+    //                 begin: _,
+    //                 block,
+    //             } => {
+    //                 let elapsed = start.elapsed();
+    //                 undownloaded_block.block_state = BlockState::Downloaded { duration: elapsed, data: block };
+    //             }
+    //             _ => {
+    //                 undownloaded_block.block_state = BlockState::Missing;
+    //             },
+    //         }
+    //     }
+    // 
+    //     if piece
+    //         .blocks
+    //         .iter()
+    //         .all(|block| matches!(block.block_state, BlockState::Downloaded { .. }))
+    //     {
+    //         let piece_bytes = piece.blocks.iter().fold(Vec::new(), |mut acc, block| {
+    //             if let BlockState::Downloaded { data, .. } = &block.block_state {
+    //                 acc.extend_from_slice(data);
+    //             }
+    //             acc
+    //         });
+    //         assert_eq!(piece_bytes.len(), piece.length, "Piece length mismatch");
+    //         piece.set_state(PieceState::Downloaded { piece_bytes });
+    //         peer.state = PeerState::Disconnected;
+    //         Ok(())
+    //     } else {
+    //         piece.piece_state = PieceState::Missing;
+    //         Err(anyhow::anyhow!("Failed to download piece from peer"))
+    //     }
+    // }
+    
+    pub async fn download_block(peer: Arc<RwLock<Self>>, block: Arc<RwLock<Block>>) -> Result<()>{
+        
+        let mut peer = peer.write().await;
+        let mut block = block.write().await;
+        let start = Instant::now();
+        let request = Message::Request {
+            index: block.index as u32,
+            begin: block.begin as u32,
+            length: block.block_size as u32,
+        };
+
+        // Check if there isn't already a connected stream
+        let stream = match &mut peer.state {
+            PeerState::Connected { stream } => stream,
+            _ => {
+                // Attempt to connect the peer using torrent info hash
+                match peer.create_client().await {
+                    Ok(()) => match &mut peer.state {
+                        PeerState::Connected { stream } => stream,
+                        _ => return Err(anyhow::anyhow!("Unexpected peer state")),
+                    },
+                    Err(e) => return Err(e),
                 }
-                acc
-            });
-            assert_eq!(piece_bytes.len(), piece.length, "Piece length mismatch");
-            piece.set_state(PieceState::Downloaded { piece_bytes });
-            peer.state = PeerState::Disconnected;
-            Ok(())
-        } else {
-            piece.piece_state = PieceState::Missing;
-            Err(anyhow::anyhow!("Failed to download piece from peer"))
+            },
+        };
+
+        Message::send_message(request, stream).await.unwrap();
+
+        match Message::read_message(stream).await.unwrap() {
+            Message::Piece {
+                index: _,
+                begin: _,
+                block: block_bytes,
+            } => {
+                let elapsed = start.elapsed();
+                block.block_state = BlockState::Downloaded { duration: elapsed, data: block_bytes };
+                return Ok(());
+            }
+            _ => {
+                block.block_state = BlockState::Missing;
+                return Err(anyhow::anyhow!("Failed to download block from peer"));
+            },
         }
     }
 }
 
 pub struct PeerPool {
-    peers: HashMap<String, Arc<RwLock<Peer>>>,
+    pub peers: HashMap<String, Arc<RwLock<Peer>>>,
     peer_piece_map: HashMap<String, HashSet<usize>>,
 }
 
@@ -249,6 +323,7 @@ impl PeerPool {
                     state: PeerState::Disconnected,
                     peer_metrics: PeerMetrics::new_default(),
                     pieces: HashSet::new(),
+                    info_hash: info_hash,
                 })),
             )
         }).collect();
@@ -263,45 +338,45 @@ impl PeerPool {
         self.peers.get(peer_id).cloned()
     }
 
-    pub async fn get_best_peer_mut(&self) -> Option<Arc<RwLock<Peer>>> {
-        let mut best_peer: Option<Arc<RwLock<Peer>>> = None;
-
-        for peer in self.peers.values() {
-            let peer = peer.clone();
-            
-            {
-                let peer_guard = peer.read().await;
-                if peer_guard.state != PeerState::Disconnected {
-                    continue;  // Skip this peer if it's not disconnected
-                }
-            }
-            
-            let peer_metrics = {
-                let peer_guard = peer.read().await;
-                peer_guard.peer_metrics.clone()
-            };
-
-            best_peer = match best_peer {
-                Some(current_best) => {
-                    let current_best_metrics = {
-                        let current_best_guard = current_best.read().await;
-                        current_best_guard.peer_metrics.clone()
-                    };
-
-                    if peer_metrics > current_best_metrics {
-                        peer.write().await.state = PeerState::Connecting;
-                        Some(peer)
-                    } else {
-                        current_best.write().await.state = PeerState::Connecting;
-                        Some(current_best)
-                    }
-                },
-                None => Some(peer),
-            };
-        }
-        
-        best_peer
-    }
+    // pub fn get_best_peer_mut(&self) -> Option<Arc<RwLock<Peer>>> {
+    //     let mut best_peer: Option<Arc<RwLock<Peer>>> = None;
+    // 
+    //     for peer in self.peers.values() {
+    //         let peer = peer.clone();
+    //         
+    //         {
+    //             let peer_guard = peer.read().unwrap();
+    //             if peer_guard.state != PeerState::Disconnected {
+    //                 continue;  // Skip this peer if it's not disconnected
+    //             }
+    //         }
+    //         
+    //         let peer_metrics = {
+    //             let peer_guard = peer.read().unwrap();
+    //             peer_guard.peer_metrics.clone()
+    //         };
+    // 
+    //         best_peer = match best_peer {
+    //             Some(current_best) => {
+    //                 let current_best_metrics = {
+    //                     let current_best_guard = current_best.read().unwrap();
+    //                     current_best_guard.peer_metrics.clone()
+    //                 };
+    // 
+    //                 if peer_metrics > current_best_metrics {
+    //                     peer.write().unwrap().state = PeerState::Connecting;
+    //                     Some(peer)
+    //                 } else {
+    //                     current_best.write().unwrap().state = PeerState::Connecting;
+    //                     Some(current_best)
+    //                 }
+    //             },
+    //             None => Some(peer),
+    //         };
+    //     }
+    //     
+    //     best_peer
+    // }
 
     pub fn add_peer_piece(&mut self, peer_id: &str, piece_index: usize) {
         self.peer_piece_map
@@ -320,5 +395,68 @@ impl PeerPool {
                 }
             })
             .collect()
+    }
+    
+    pub fn with_bad_peer(&mut self) {
+        let bad_peer = Peer { id: "bad_peer".to_string(), ip: "".to_string(), port: 0, state: PeerState::Disconnected, peer_metrics: PeerMetrics::new_default(), pieces: HashSet::new(), info_hash: [0; 20] };
+        self.peers.insert("bad_peer".to_string(), Arc::new(RwLock::new(bad_peer)));
+    }
+}
+
+mod test {
+    use std::collections::{HashMap, HashSet};
+    use std::fs;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    use crate::peer::{Peer, PeerMetrics, PeerPool, PeerState};
+    use crate::Torrent;
+
+    #[tokio::test]
+    async fn test_get_next_peer_mut() {
+        
+        
+        // let peer1 = Arc::new(RwLock::new(Peer {
+        //     id: "1".to_string(),
+        //     ip: "".to_string(),
+        //     port: 0,
+        //     state: PeerState::Disconnected,
+        //     peer_metrics: PeerMetrics::new_default(),
+        //     pieces: HashSet::new(),
+        // }));
+        // 
+        // let peer2 = Arc::new(RwLock::new(Peer {
+        //     id: "2".to_string(),
+        //     ip: "".to_string(),
+        //     port: 0,
+        //     state: PeerState::Disconnected,
+        //     peer_metrics: PeerMetrics::new_default(),
+        //     pieces: HashSet::new(),
+        // }));
+        // 
+        // let peer3 = Arc::new(RwLock::new(Peer {
+        //     id: "3".to_string(),
+        //     ip: "".to_string(),
+        //     port: 0,
+        //     state: PeerState::Disconnected,
+        //     peer_metrics: PeerMetrics::new_default(),
+        //     pieces: HashSet::new(),
+        // }));
+        // 
+        // let mut peers = PeerPool {
+        //     peers: vec![
+        //         ("1".to_string(), peer1.clone()),
+        //         ("2".to_string(), peer2.clone()),
+        //         ("3".to_string(), peer3.clone()),
+        //     ].into_iter().collect(),
+        //     peer_piece_map: HashMap::new(),
+        // };
+
+        // let best_peer = peers.get_best_peer_mut();
+
+        // assert!(best_peer.is_some());
+        // let peer_guard = best_peer.unwrap().read().await;
+        // assert_eq!(peer_guard.peer_metrics.quality, 20);
+        // assert_eq!(peer_guard.state, PeerState::Connecting);
     }
 }

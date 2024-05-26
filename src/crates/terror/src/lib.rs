@@ -15,6 +15,7 @@ pub(crate) mod message;
 pub(crate) mod metrics;
 mod piece;
 mod download;
+mod actor;
 
 
 #[cfg(test)]

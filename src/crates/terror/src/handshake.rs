@@ -51,11 +51,19 @@ impl Handshake {
 
     async fn from_stream(stream: &mut tokio::net::TcpStream) -> tokio::io::Result<Self> {
         let mut bytes = vec![0; 68]; // length of handshake message
-
+        
         if stream.ready(tokio::io::Interest::READABLE).await?.is_readable() {
             // The stream is readable, proceed with reading
             eprintln!("Reading bytes");
-            stream.read_exact(&mut bytes).await?;
+            match stream.read_exact(&mut bytes).await {
+                Ok(_) => {
+                    eprintln!("Read bytes: {:?}", bytes);
+                }
+                Err(e) => {
+                    eprintln!("Error reading bytes: {:?}", e);
+                    return Err(e);
+                }
+            };
             // Process the read bytes
         } else {
             // The stream is not readable, handle accordingly
@@ -99,10 +107,16 @@ impl Handshake {
         let mut handshake = Handshake::new(info_hash, peer_id);
         let handshake_bytes = handshake.to_bytes();
         
-        eprintln!("Send handshake request {}", hex::encode(handshake_bytes.to_vec()));
+        eprintln!("Send handshake request {}", hex::encode(handshake_bytes));
         stream.write_all(&handshake_bytes).await?;
 
-        let received_handshake = Handshake::from_stream(stream).await?;
+        let received_handshake = match Handshake::from_stream(stream).await {
+            Ok(handshake) => handshake,
+            Err(e) => {
+                eprintln!("Error reading handshake: {:?}", e);
+                return Err(anyhow::anyhow!("Error reading handshake"));
+            }
+        };
 
         println!("Peer ID: {}", hex::encode(received_handshake.peer_id));
 

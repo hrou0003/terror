@@ -1,7 +1,8 @@
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
+use actix::prelude::*;
 use serde::{Deserialize, Serialize};
 use crate::Torrent;
 
@@ -10,11 +11,13 @@ pub(crate) struct Piece {
     pub(crate) length: usize,
     pub(crate) piece_hash: Vec<u8>,
     pub(crate) piece_state: PieceState,
-    pub(crate) blocks: Vec<Block>,
+    pub(crate) blocks: Vec<Arc<RwLock<Block>>>,
     pub(crate) number_of_blocks: usize,
     pub(crate) priority: Priority,
 }
 
+#[derive(Message)]
+#[rtype(result = "ResponseFuture<()>")]
 pub(crate) struct Block {
     pub(crate) index: usize,
     pub(crate) begin: usize,
@@ -53,7 +56,7 @@ pub(crate) enum PieceState {
 }
 
 pub(crate) struct PiecePool {
-    pub(crate) pieces: HashMap<usize, Arc<Mutex<Piece>>>,
+    pub(crate) pieces: HashMap<usize, Arc<RwLock<Piece>>>,
     piece_peer_map: HashMap<usize, HashSet<String>>,
 }
 
@@ -71,26 +74,12 @@ impl Piece {
         self.piece_state = state;
     }
 
-    pub fn get_bytes(&self) -> Vec<u8> {
-        self.blocks.iter().fold(Vec::new(), |mut acc, block| {
-            if let BlockState::Downloaded { data, .. } = &block.block_state {
-                acc.extend_from_slice(data)
-            }
-            acc
-        })
-    }
 
     pub fn set_priority(&mut self, priority: Priority) {
         self.priority = priority;
     }
 
-    pub fn get_blocks(&self) -> impl Iterator<Item = &Block> {
-        self.blocks.iter()
-    }
 
-    pub fn get_blocks_mut(&mut self) -> impl Iterator<Item = &mut Block> {
-        self.blocks.iter_mut()
-    }
 }
 
 
@@ -108,7 +97,7 @@ impl PiecePool {
             };
 
             let number_of_blocks = (length + block_size - 1) / block_size;
-            let blocks = (0..number_of_blocks).map(|block_index| Block {
+            let blocks = (0..number_of_blocks).map(|block_index| Arc::new(RwLock::new(Block {
                 index: block_index,
                 begin: block_index * block_size,
                 block_size: if block_index == number_of_blocks - 1 && index == number_of_pieces - 1 {
@@ -117,9 +106,9 @@ impl PiecePool {
                     block_size
                 },
                 block_state: BlockState::Missing,
-            }).collect();
+            }))).collect();
 
-            (index, Arc::new(Mutex::new(Piece {
+            (index, Arc::new(RwLock::new(Piece {
                 index,
                 length,
                 piece_hash: torrent.info.pieces[index * 20..(index + 1) * 20].to_vec(),
@@ -150,17 +139,17 @@ impl PiecePool {
     }
 
     // Get the next piece to download based on prioritization logic
-    pub async fn get_next_piece_mut(&self) -> Option<Arc<Mutex<Piece>>> {
+    pub async fn get_next_piece_mut(&self) -> Option<Arc<RwLock<Piece>>> {
         // Example prioritization logic: by piece state and then by priority
         let mut sorted_pieces: Vec<_> = self.pieces.values().collect();
         sorted_pieces.sort_by_key(|p| {
-            let piece = p.blocking_lock();
+            let piece = p.blocking_read();
             (piece.piece_state.clone(), piece.priority.clone())
         });
 
         for piece in sorted_pieces {
             let piece = piece.clone();
-            let piece_guard = piece.blocking_lock();
+            let piece_guard = piece.blocking_read();
             if piece_guard.piece_state == PieceState::Missing {
                 return Some(piece.clone());
             }
@@ -171,16 +160,16 @@ impl PiecePool {
 
     pub async fn mark_downloading(&self, index: usize) {
         if let Some(piece) = self.pieces.get(&index) {
-            let mut piece = piece.lock().await;
+            let mut piece = piece.write().await;
             piece.piece_state = PieceState::Downloading;
         }
     }
 
-    pub fn get_piece(&self, index: usize) -> Option<Arc<Mutex<Piece>>> {
+    pub fn get_piece(&self, index: usize) -> Option<Arc<RwLock<Piece>>> {
         self.pieces.get(&index).cloned()
     }
 
-    pub fn get_piece_mut(&self, index: usize) -> Option<Arc<Mutex<Piece>>> {
+    pub fn get_piece_mut(&self, index: usize) -> Option<Arc<RwLock<Piece>>> {
         self.pieces.get(&index).cloned()
     }
 

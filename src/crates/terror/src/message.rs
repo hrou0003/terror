@@ -10,7 +10,9 @@ const BLOCK_LENGTH : usize = 1 << 14;
 
 #[derive(PartialEq, Debug)]
 pub(crate) enum Message {
-    Bitfield,
+    Bitfield {
+        bitfield: Vec<u8>
+    },
     Interested,
     Unchoke,
     Request {
@@ -30,7 +32,7 @@ impl Message {
         match self {
             Message::Unchoke => 1,
             Message::Interested => 2,
-            Message::Bitfield => 5,
+            Message::Bitfield  { .. } => 5,
             Message::Request { .. } => 6,
             Message::Piece { .. } => 7,
         }
@@ -38,7 +40,12 @@ impl Message {
 
     fn encode(&self) -> anyhow::Result<Vec<u8>> {
         let payload = match self {
-            Message::Unchoke | Message::Interested | Message::Bitfield => vec![],
+            Message::Unchoke | Message::Interested => vec![],
+            Message::Bitfield { bitfield } => {
+                let mut buf = Vec::new();
+                buf.extend(bitfield);
+                buf
+            }
             Message::Request {
                 index,
                 begin,
@@ -102,9 +109,12 @@ impl Message {
         stream.read_exact(&mut payload).await?;
 
         match message_type {
-            5 => Ok(Message::Bitfield),
             2 => Ok(Message::Interested),
             1 => Ok(Message::Unchoke),
+            5 => {
+                let bitfield = payload;
+                Ok(Message::Bitfield { bitfield })
+            },
             6 => {
                 let index = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
                 let begin = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);

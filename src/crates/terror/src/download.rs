@@ -1,101 +1,188 @@
 use std::sync::Arc;
 use std::time::Instant;
-
-use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex, Semaphore};
-use tokio::task::JoinSet;
-
+use actix::prelude::*;
+use tokio::sync::RwLock;
 use crate::peer::{Peer, PeerPool};
-use crate::piece::{PiecePool, PieceState};
-use crate::Torrent;
+use crate::piece::{Block, Piece, PiecePool};
+use anyhow::Result;
 
-pub struct TorrentDownloader {
-    piece_pool: PiecePool,
-    peer_pool: PeerPool,
-    torrent: Torrent
+
+struct PeerActor {
+    peer: Arc<RwLock<Peer>>,
+}
+impl Actor for PeerActor {
+    type Context = Context<Self>;
 }
 
-#[derive(Clone)]
-pub struct DownloadTask {
-    piece_index: usize,
-    result_tx: Sender<Result<usize, anyhow::Error>>,
+impl Supervised for PeerActor {
 }
 
-impl TorrentDownloader {
-    pub const MAX_CONCURRENT: usize = 1;
-    pub  const MAX_RETRIES: usize = 3;
-    pub async fn new(torrent: &Torrent) -> anyhow::Result<Self> {
-        let piece_pool = PiecePool::new(&torrent)?;
-        let peer_pool = PeerPool::new(torrent).await?;
-        let torrent = torrent.clone();
-
-        Ok(TorrentDownloader { piece_pool, peer_pool, torrent })
+impl Default for PeerActor {
+    fn default() -> Self {
+        todo!()
     }
+}// Manually implement SystemService but leave Default out
+impl SystemService for PeerActor {
+    fn service_started(&mut self, _ctx: &mut Context<Self>) {
+        println!("PeerActor is started");
+    }
+}
 
-    // Start download workers that will monitor the download channel.
-    pub async fn download(&mut self) -> Result<Vec<u8>, anyhow::Error> {
+struct BlockMessage {
+    block: Arc<RwLock<Block>>,
+}
 
-        let semaphore = Arc::new(Semaphore::new(Self::MAX_CONCURRENT));
-        let mut set = JoinSet::new();
+impl Message for BlockMessage {
+    type Result = Result<()>;
+}
+impl Handler<BlockMessage> for PeerPool {
+    type Result = ResponseActFuture<Self, Result<()>>;
 
-        let torrent_info_hash = self.torrent.calculate_info_hash();
+    fn handle(&mut self, msg: BlockMessage, _: &mut Self::Context) -> Self::Result {
+        let block = msg.block.clone();
+        let peer = self.peers.values().next().unwrap().clone();
 
-        while let Some(piece) = self.piece_pool.get_next_piece_mut().await {
-            let semaphore = semaphore.clone();
-            let peer = self.peer_pool.get_best_peer_mut().await.unwrap();
+       let fut = async move {
+            // Extract start time before async operation
+            let start_time = Instant::now();
 
-            set.spawn(async move {
-                let _permit = semaphore.acquire().await.unwrap(); // Proper unwrap for the semaphore acquire.
-                let mut retries = 0;
+            let success = Peer::download_block(peer, block).await;
 
-                while retries < Self::MAX_RETRIES {
-                        let mut piece = piece.clone();
-                        let peer = peer.clone();
-                        // eprintln!("Retries: {} for piece {} with peer {}", retries, piece.index, peer.id);
-                        // Properly handle the result of download_piece and break if successful.
-                        if Peer::download_piece(peer, piece, torrent_info_hash).await.is_ok() {
-                            retries += 1;
-                            break;
-                        }
-                }
-            });
-        }
+            // Calculate duration
+            let duration = start_time.elapsed();
+            
+            Ok(())
+        }.into_actor(self);
+        
+        Box::pin(fut)
+    }
+}
 
-        while let Some(res) = set.join_next().await {
-            match res {
-                Ok(()) => {},
-                Err(e) => eprintln!("Task failed: {e}"),
+impl Handler<BlockMessage> for PeerActor {
+    type Result = ResponseActFuture<Self, Result<()>>;
+
+    fn handle(&mut self, msg: BlockMessage, _: &mut Self::Context) -> Self::Result {
+        let block = msg.block.clone();
+        let peer = self.peer.clone();
+
+        let fut = async move {
+            // Extract start time before async operation
+            let start_time = Instant::now();
+
+            let success = Peer::download_block(peer, block).await;
+
+            // Calculate duration
+            let duration = start_time.elapsed();
+
+            Ok(())
+        }.into_actor(self);
+
+        Box::pin(fut)
+    }
+}
+
+struct PieceMessage {
+    piece: Arc<RwLock<Piece>>,
+}
+
+impl Message for PieceMessage {
+    type Result = Result<()>;
+}
+
+impl Actor for PiecePool {
+    type Context = Context<Self>;
+}
+
+impl Handler<PieceMessage> for PiecePool {
+    type Result = ResponseActFuture<Self, Result<()>>;
+    
+    fn handle(&mut self, msg: PieceMessage, _: &mut Self::Context) -> Self::Result {
+        let piece = msg.piece.clone();
+        let fut = async move {
+            let mut piece = piece.write().await;
+            for block in &mut piece.blocks {
+                let block_message = BlockMessage {
+                    block: block.clone(),
+                };
+                let _ = PeerPool::from_registry().send(block_message).await?;
             }
-        };
-
-        let mut torrent_data = Vec::new();
-
-        // for piece in &mut self.piece_pool.pieces {
-        //     let (piece_index, piece) = piece;
-        //     let piece = piece.lock().await;
-        //     match &piece.piece_state {
-        //         PieceState::Downloaded { piece_bytes } => torrent_data.extend_from_slice(piece_bytes),
-        //         _ => return Err(anyhow::anyhow!("Piece not downloaded")),
-        //     }
-        // }
-
-        Ok(torrent_data)
-
+            Ok(())
+        }.into_actor(self);
+        
+        Box::pin(fut)
     }
-
 }
 
-mod tests {
-    use std::fs;
+impl Actor for PeerPool {
+    type Context = Context<Self>;
+}
 
-    use crate::download::TorrentDownloader;
+impl Supervised for PeerPool {
+}
+
+impl Default for PeerPool {
+    fn default() -> Self {
+        todo!()
+    }
+}
+
+impl SystemService for PeerPool {
+    fn service_started(&mut self, _ctx: &mut Context<Self>) {
+        println!("PeerPool is started");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::peer::{PeerPool};
+    use crate::piece::BlockState;
+    use super::*;
     use crate::Torrent;
 
-    #[tokio::test]
-    async fn test_download() {
+    #[actix::test]
+    async fn test_peer_actor() {
         let torrent = Torrent::new("test/sample.torrent".to_string());
-        let output = TorrentDownloader::new(&torrent).await.unwrap().download().await.expect("Couldn't download torrent");
-        let correct_output = fs::read("test/sample_correct.txt").expect("Couldn't read correct output");
-        fs::write("test/output", &output).expect("Couldn't write output");
-        assert_eq!(output, correct_output);
+        let peer_pool = PeerPool::new(&torrent).await.unwrap();
+        
+        let first_peer_id = peer_pool.peers.keys().nth(1).unwrap().clone();
+        let (_, peer) = peer_pool.peers.get_key_value::<String>(&first_peer_id).unwrap();
+        
+        let peer_actor = PeerActor {
+            peer: peer.clone(),
+        }.start();
+        
+        let block = Block {
+            index: 0,
+            begin: 0,
+            block_size: 1 << 14,
+            block_state: BlockState::Missing,
+        };
+        
+        let block_message = BlockMessage {
+            block: Arc::new(RwLock::new(block)),
+        };
+        
+        let result = peer_actor.send(block_message).await;
+        
+        assert!(result.is_ok());
+        
+    }
+    
+    #[actix::test]
+    async fn test_piece_actor() {
+        let torrent = Torrent::new("test/sample.torrent".to_string());
+        let mut piece_pool = PiecePool::new(&torrent).unwrap();
+        
+        let first_piece = piece_pool.pieces.keys().nth(0).unwrap().clone();
+        let (_, piece) = piece_pool.pieces.get_key_value::<usize>(&first_piece).unwrap();
+        
+        let piece_message = PieceMessage {
+            piece: piece.clone(),
+        };
+        
+        // let result = piece_pool.send(piece_message).await;
+        
+        // assert!(result.is_ok());
     }
 }
+    
