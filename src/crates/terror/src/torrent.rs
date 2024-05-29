@@ -1,17 +1,11 @@
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::HashMap;
 use std::fs;
-use std::sync::Arc;
-use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use sha1::{Digest, Sha1};
-use tokio::sync::{Mutex, RwLock, Semaphore};
-use tokio::task::JoinSet;
-use crate::message::Message;
-use crate::peer::{Peer, PeerPool, PeerState};
 
-use crate::piece::{BlockState, Piece, PiecePool, PieceState, Priority};
+use crate::piece::Priority;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Torrent {
