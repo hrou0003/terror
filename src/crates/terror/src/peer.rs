@@ -3,7 +3,7 @@ use std::sync::{Arc};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex, oneshot};
 use tokio::task;
 use uuid::Uuid;
 use crate::download::{CompletedTask, DownloadTask};
@@ -11,77 +11,48 @@ use crate::message::Message;
 use crate::Torrent;
 use crate::utils::*;
 
-type CycleRx = tokio::sync::mpsc::Receiver<CycleMessage>;
+type CycleRx = mpsc::Receiver<CycleMessage>;
 
 pub struct Peer {
-    id: String,
-    ip_addr: IpAddr,
-    port: u16,
+    pub(crate) id: String,
+    pub(crate) ip_addr: IpAddr,
+    pub(crate) port: u16,
     state: PeerState,
     info_hash: [u8; 20],
+    stream:
 }
 
+
+pub(crate) enum PeerState {
+    Connected { stream: Arc<Mutex<TcpStream>> },
+    Disconnected,
+}
+
+
+
 impl Peer {
-    async fn connect(&mut self, mut task_rx: Receiver<DownloadTask>, completed_task_tx: Sender<CompletedTask>, cycle_tx: Sender<CycleMessage>) {
-        let stream = match &self.state {
-            PeerState::Connected { .. } => {
-                println!("Peer {} is already connected", self.id);
-                match &self.state {
-                    PeerState::Connected { stream, .. } => stream.clone(),
-                    _ => unreachable!(),
-                }
-            }
-            PeerState::Disconnected => {
-                println!("Connecting to peer {}", self.id);
-                let ip_addr = self.ip_addr.clone();
-                let port = self.port;
-                let tcp_stream = TcpStream::connect((ip_addr, port)).await.unwrap();
-                let stream = Arc::new(Mutex::new(tcp_stream));
-                self.state = PeerState::Connected {
-                    stream: stream.clone(),
-                    task_rx: task_rx.resubscribe(),
-                    cycle_tx: cycle_tx.clone(),
-                };
-                stream
-            }
-        };
-
-        self.spawn_task_listener(task_rx, stream, completed_task_tx).await;
-    }
-
-    async fn spawn_task_listener(&self, mut task_rx: Receiver<DownloadTask>, stream: Arc<Mutex<TcpStream>>, completed_task_tx: Sender<CompletedTask>) {
-        task::spawn(async move {
-            loop {
-                if let Ok(task) = task_rx.recv().await {
-                    // Download task
-                    {
-                        Self::download_block_from_stream(stream.clone(), task.piece_index as u32, task.begin as u32, task.length as u32).await;
-                    }
-
-                    // Send completion back
-                    completed_task_tx.send(CompletedTask {
-                        piece_index: task.piece_index,
-                        block_index: task.block_index,
-                        bytes: vec![],
-                        status: Ok(()),
-                    }).await.unwrap();
-                }
-            }
-        });
-    }
-
     
-    async fn download_block_from_stream(stream: Arc<Mutex<TcpStream>>, index: u32, begin: u32, length: u32) -> anyhow::Result<Vec<u8>> {
+    pub fn new(ip_addr: IpAddr, port: u16, info_hash: [u8; 20]) -> Self {
+        Peer {
+            id: Uuid::new_v4().to_string(),
+            ip_addr,
+            port,
+            state: PeerState::Disconnected,
+            info_hash,
+        }
+    }
+    
+    pub async fn download_block_from_stream(stream: Arc<Mutex<TcpStream>>, index: u32, begin: u32, length: u32) -> anyhow::Result<Vec<u8>> {
         let mut stream = stream.lock().await;
-        
+
         let message = Message::Request {
             index, begin, length
         };
-        
+
         Message::send_message(message, &mut stream).await?;
-        
+
         let response = Message::read_message(&mut stream).await?;
-        
+
         match response {
             Message::Piece { block, .. } => {
                 Ok(block)
@@ -91,13 +62,9 @@ impl Peer {
             }
         }
     }
-    
 }
 
-enum PeerState {
-    Connected { stream: Arc<Mutex<TcpStream>>, cycle_tx: Sender<CycleMessage>, task_rx: Receiver<DownloadTask> },
-    Disconnected,
-}
+
 
 pub struct PeerPool {
     active_peers: Vec<Peer>,
@@ -108,7 +75,7 @@ pub struct PeerPool {
     cycle_rx: CycleRx
 }
 
-struct CycleMessage {
+pub(crate) struct CycleMessage {
     peer_id: String,
 }
 

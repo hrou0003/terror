@@ -17,6 +17,7 @@ mod piece;
 mod download;
 mod actor;
 mod utils;
+mod peer_actor;
 
 
 #[cfg(test)]

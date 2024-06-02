@@ -34,7 +34,7 @@ struct TorrentDownloader {
 
 impl TorrentDownloader {
     async fn new(t: &Torrent) -> Self {
-        let (completed_task_tx, mut completed_task_rx) = mpsc::channel::<CompletedTask>(32);
+        let (completed_task_tx, completed_task_rx) = mpsc::channel::<CompletedTask>(32);
         let (task_tx, task_rx) = broadcast::channel::<DownloadTask>(32);
 
         
@@ -47,7 +47,8 @@ impl TorrentDownloader {
     async fn start(&mut self) {
 
         // start the piece pool
-        self.piece_pool.start();
+        
+        self.piece_pool.start().await;
 
         // Start the peer pool
         self.peer_pool.start().await;
