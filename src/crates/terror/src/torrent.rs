@@ -11,6 +11,13 @@ use crate::piece::Priority;
 pub struct Torrent {
     // URL to a "tracker", which is a central server that keeps track of peers participating in the sharing of a torrent.
     pub announce: String,
+    #[serde(rename = "announce-list")]
+    announce_list: Option<Vec<Vec<String>>>,
+    comment: Option<String>,
+    #[serde(rename = "created by")]
+    created_by: Option<String>,
+    #[serde(rename = "creation date")]
+    creation_date: Option<i64>,
     pub info: Info,
 }
 

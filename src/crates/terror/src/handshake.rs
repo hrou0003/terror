@@ -1,5 +1,8 @@
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::torrent::{Torrent};
 
@@ -49,7 +52,7 @@ impl Handshake {
         bytes
     }
 
-    async fn from_stream(stream: &mut tokio::net::TcpStream) -> tokio::io::Result<Self> {
+    async fn from_stream(stream: &mut TcpStream) -> tokio::io::Result<Self> {
         let mut bytes = vec![0; 68]; // length of handshake message
         
         if stream.ready(tokio::io::Interest::READABLE).await?.is_readable() {
@@ -101,7 +104,7 @@ impl Handshake {
         })
     }
 
-    pub(crate) async fn handshake(info_hash: [u8; 20], stream: &mut tokio::net::TcpStream) -> anyhow::Result<Handshake> {
+    pub async fn handshake(info_hash: [u8; 20], stream: &mut TcpStream) -> anyhow::Result<Handshake> {
 
         let peer_id: [u8; 20] = *b"00112233445566778899";
         let mut handshake = Handshake::new(info_hash, peer_id);
@@ -118,7 +121,7 @@ impl Handshake {
             }
         };
 
-        println!("Peer ID: {}", hex::encode(received_handshake.peer_id));
+        println!("Handshake completed on: {}", hex::encode(received_handshake.peer_id));
 
         Ok(received_handshake)
     }

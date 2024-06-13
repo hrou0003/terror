@@ -12,11 +12,18 @@ pub fn percent_encode_hash(s: &str) -> String {
     result
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct TrackerResponse {
-    interval: usize,
-    #[serde(rename = "peers")]
-    pub(crate) peers_raw: ByteBuf,
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct TrackerResponse {
+    pub interval: i64,
+    pub peers: Vec<Peer>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Peer {
+    pub(crate) ip: String,
+    #[serde(rename = "peer id", skip)]
+    pub peer_id: String,
+    pub port: i64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

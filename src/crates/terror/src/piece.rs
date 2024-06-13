@@ -1,11 +1,14 @@
 use std::cmp::PartialEq;
-use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
-use std::sync::{Arc};
+use tokio::sync::{mpsc};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use actix::prelude::*;
-use crate::download::{CompletedTask, DownloadTask};
+use kanal::AsyncSender;
+use sha1::{Digest, Sha1};
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 use crate::Torrent;
+use crate::torrent_manager::{CompletedTask, DownloadBlock};
 
 pub(crate) struct Piece {
     pub(crate) index: usize,
@@ -40,13 +43,15 @@ impl Default for Priority {
     }
 }
 
+#[derive(PartialEq, Eq)]
 pub(crate) enum BlockState {
     Downloaded {
         data: Vec<u8>,
         duration: Duration,
     },
     Downloading,
-    Missing
+    Missing,
+    Saved
 }
 
 #[derive(PartialEq, PartialOrd, Ord, Eq, Clone)]
@@ -54,11 +59,12 @@ pub(crate) enum PieceState {
     Missing,
     Downloading,
     Downloaded { piece_bytes: Vec<u8> },
+    Saved
 }
 
 pub(crate) struct PiecePool {
     pub(crate) pieces: HashMap<usize, Piece>,
-    task_tx: broadcast::Sender<DownloadTask>,
+    task_tx: AsyncSender<DownloadBlock>,
     completed_task_rx: mpsc::Receiver<CompletedTask>,
     piece_peer_map: HashMap<usize, HashSet<String>>,
 }
@@ -79,10 +85,28 @@ impl Piece {
         self.priority = priority;
     }
 
+    pub fn verify(&self) -> Option<bool> {
+        match &self.piece_state {
+            PieceState::Downloaded { piece_bytes } => {
+                let mut hasher = Sha1::new();
+                hasher.update(piece_bytes); 
+                let downloaded_bytes_hash = hasher.finalize().to_vec();
+                return Some(*self.piece_hash == downloaded_bytes_hash);
+            },
+            _ => None
+        }
+    }
+    
+    pub fn set_saved(&mut self) {
+        self.piece_state = PieceState::Saved;
+        self.blocks.iter_mut().for_each(|block| {
+            block.block_state = BlockState::Saved;
+        });
+    }
 }
 
 impl PiecePool {
-    pub(crate) fn new(torrent: &Torrent, task_tx: broadcast::Sender<DownloadTask>, completed_task_rx: mpsc::Receiver<CompletedTask>) -> anyhow::Result<Self> {
+    pub(crate) fn new(torrent: &Torrent, task_tx: AsyncSender<DownloadBlock>, completed_task_rx: mpsc::Receiver<CompletedTask>) -> anyhow::Result<Self> {
 
         let number_of_pieces = (torrent.info.length as f64 / torrent.info.piece_length as f64).ceil() as usize;
         let block_size = 1 << 14;
@@ -128,52 +152,87 @@ impl PiecePool {
     pub async fn start(&mut self) {
         
         // Queue up the first 10 pieces
-        self.queue_n_pieces(10);
+        self.queue_n_tasks(5).await;
         
         // Start listening on the response channel
-        while let Some(completed_task) = self.completed_task_rx.recv().await {
-            let mut piece = self.pieces.get_mut(&completed_task.piece_index).unwrap();
-            let mut block = piece.blocks.get_mut(completed_task.block_index).unwrap();
-            match completed_task.status {
-                Ok(_) => {
+        loop {
+            let Some(completed_task) = self.completed_task_rx.recv().await else {
+                break;
+            };
+            match completed_task {
+                CompletedTask::DownloadedBlock { piece_index, block_index, bytes } => {
+                    let mut piece = self.pieces.get_mut(&piece_index).unwrap();
+                    let mut block = piece.blocks.get_mut(block_index).unwrap();
+
                     block.set_state(BlockState::Downloaded {
-                        data: completed_task.bytes,
+                        data: bytes,
                         duration: Duration::from_secs(0),
                     });
-                }
-                Err(e) => {
-                    block.set_state(BlockState::Missing);
-                    println!("Error downloading block: {:?}", e);
-                }
-            }
-            // Check if the piece is complete
-            if piece.blocks.iter().all(|block| matches!(block.block_state, BlockState::Downloaded { .. })) {
-                let piece_bytes: Vec<u8> = piece.blocks.iter().flat_map(|block| {
-                    match &block.block_state {
-                        BlockState::Downloaded { data, .. } => data.clone(),
-                        _ => vec![],
+
+                    // Check if the piece is complete
+                    if piece.blocks.iter().all(|block| matches!(block.block_state, BlockState::Downloaded { .. })) {
+                        let piece_bytes: Vec<u8> = piece.blocks.iter().flat_map(|block| {
+                            match &block.block_state {
+                                BlockState::Downloaded { data, .. } => data.clone(),
+                                _ => vec![],
+                            }
+                        }).collect();
+                        piece.set_state(PieceState::Downloaded { piece_bytes: piece_bytes.clone() });
+                        // TODO: Verify the piece hash and save the piece to its file
+                        if piece.verify().unwrap() {
+
+                            // Save to file
+                            // We need to know the structure of the file system...
+                            let mut file = File::create("test.zip").await.unwrap();
+                            match file.write_all(piece_bytes.as_slice()).await {
+                                Ok(_) => {
+                                    // Set piece and block states, assuming the save goes well
+                                    piece.set_saved();
+
+                                    // Queue more pieces to download
+                                    let number_of_queued_pieces = self.queue_n_tasks(5).await;
+                                    match number_of_queued_pieces {
+                                        Some(_i) => {},
+                                        None => {
+                                            self.task_tx.close();
+                                            return
+                                        }
+                                    }
+                                },
+                                Err(_) => {
+                                    return;
+                                }
+                            };
+                        };
                     }
-                }).collect();
-                piece.set_state(PieceState::Downloaded { piece_bytes });
-                // TODO: Verify the piece hash and save the piece to its file
+                }
+                CompletedTask::FailedBlock { piece_index, block_index } => {
+                    println!("Failed to download block {} of piece {}", block_index, piece_index);
+                }
             }
         }
-        
     }
     
-    pub fn queue_n_pieces(&self, n: usize)  {
-        for _ in 0..n {
-            if let Some(piece) = self.get_next_piece() {
+    pub async fn queue_n_tasks(&mut self, n: usize) ->  Option<usize> {
+        // Pieces and blocks need to be flattened
+        // Need to think about to handle this better in terms of flagging downloading state between
+        // Blocks and Pieces
+        let task_tx = self.task_tx.clone();
+        for i in 0..n {
+            if let Some(piece) = self.get_next_piece_mut() {
                 for block in &piece.blocks {
-                    self.task_tx.send(DownloadTask {
+                    task_tx.send(DownloadBlock {
                         piece_index: piece.index,
                         block_index: block.index,
                         begin: block.begin,
                         length: block.block_size,
-                    }).unwrap();
+                    }).await.unwrap();
                 }
+            } else {
+                return Some(i);
             }
         }
+        return Some(n);
     }
 
     // Add peers that have specific pieces
@@ -190,7 +249,7 @@ impl PiecePool {
     }
 
     // Get the next piece to download based on prioritization logic
-    pub async fn get_next_piece_mut(&mut self) -> Option<&mut Piece> {
+    pub fn get_next_piece_mut(&mut self) -> Option<&mut Piece> {
         // Example prioritization logic: by piece state and then by priority
         let mut sorted_pieces: Vec<_> = self.pieces.values_mut().collect();
 
@@ -203,6 +262,18 @@ impl PiecePool {
             }
         }
 
+        None
+    }
+    
+    fn get_next_block(&mut self) -> Option<&Block> {
+        let piece = self.get_next_piece_mut().unwrap();
+        for block in &mut piece.blocks {
+            if block.block_state == BlockState::Missing {
+                block.block_state = BlockState::Downloading;
+                return Some(block);
+            }
+        }
+        
         None
     }
     
