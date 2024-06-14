@@ -12,10 +12,25 @@ pub fn percent_encode_hash(s: &str) -> String {
     result
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct TrackerResponse {
-    pub interval: i64,
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TrackerResponse {
+    interval: usize,
+    #[serde(deserialize_with = "deserialize_peers")]
     pub peers: Vec<Peer>,
+}
+
+fn deserialize_peers<'de, D>(deserializer: D) -> Result<Vec<Peer>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+{
+    let bytes = serde_bytes::ByteBuf::deserialize(deserializer)?;
+    let mut peers = Vec::new();
+    for chunk in bytes.chunks_exact(6) {
+        let ip = format!("{}.{}.{}.{}", chunk[0], chunk[1], chunk[2], chunk[3]);
+        let port = ((chunk[4] as u16) << 8) | (chunk[5] as u16);
+        peers.push(Peer { peer_id: "test".to_string(), ip, port: port as i64 });
+    }
+    Ok(peers)
 }
 
 #[derive(Debug, Serialize, Deserialize)]

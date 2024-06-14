@@ -133,7 +133,6 @@ impl PeerActor {
 async fn run_peer_actor(mut actor: PeerActor) {
     while let Ok(msg) = actor.receiver.recv().await {
         actor.handle_message(msg).await;
-
     }
 }
 

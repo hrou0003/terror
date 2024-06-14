@@ -191,17 +191,16 @@ impl PiecePool {
 
                                     // Queue more pieces to download
                                     let number_of_queued_pieces = self.queue_n_tasks(5).await;
-                                    match number_of_queued_pieces {
-                                        Some(_i) => {},
-                                        None => {
-                                            self.task_tx.close();
-                                            return
-                                        }
+                                    // Check if all pieces are downloaded
+                                    if self.all_pieces_downloaded().unwrap() {
+                                        self.task_tx.close();
+                                        return
                                     }
                                 },
                                 Err(_) => {
                                     return;
                                 }
+                                
                             };
                         };
                     }
@@ -229,7 +228,7 @@ impl PiecePool {
                     }).await.unwrap();
                 }
             } else {
-                return Some(i);
+                return None;
             }
         }
         return Some(n);
@@ -290,5 +289,10 @@ impl PiecePool {
     pub fn get_piece(&self, index: usize) -> Option<&Piece> {
         self.pieces.get(&index)
     }
+    
+    pub fn all_pieces_downloaded(&self) -> Option<bool> {
+        Some(self.pieces.iter().all(|(_, piece)| piece.piece_state == PieceState::Saved))
+    }
+    
 
 }
