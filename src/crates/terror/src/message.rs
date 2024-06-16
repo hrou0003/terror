@@ -133,9 +133,6 @@ impl Message {
     }
 }
 
-
-
-
 mod tests {
     use std::fs;
     use crate::message::{Message};

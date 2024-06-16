@@ -85,7 +85,7 @@ mod tests
     #[test]
     async fn main() {
         
-        let torrent = Torrent::new("test/FEOW-TNC.zip-fb993412755d0bdc8aabd9c6959215293958b220.torrent".to_string());
+        let torrent = Torrent::new("test/BuzzFeedNewstranscriptionofAirbnbNYCdata.xlsx-968a3ff5e4182cdecd239980ecfd257a37451003.torrent".to_string());
         let mut torrent_manager = TorrentManager::new(torrent).await;
 
         torrent_manager.run().await;
