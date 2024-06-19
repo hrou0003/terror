@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 
 use serde::{Deserialize, Serialize};
@@ -23,50 +22,46 @@ pub struct Torrent {
     pub url_list: Option<Vec<String>>
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Info {
     // size of the file in bytes, for single-file torrents
-    #[serde(default)]
-    pub length: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub length: Option<usize>,
     // suggested name to save the file / directory as
     pub name: String,
     // number of bytes in each piece
     #[serde(rename = "piece length")]
-    pub piece_length: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub piece_length: Option<usize>,
     // concatenated SHA-1 hashes of each piece
     pub pieces: ByteBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub md5hash: Option<String>,
     // list of files in a multi-file torrent
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<FileInfo>>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct FileInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<String>,
     pub(crate) length: usize,
     pub(crate) path: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) md5sum: Option<String>,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) offset: Option<usize>,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) start_piece: Option<usize>,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) end_piece: Option<usize>,
-    #[serde(default)]
-    pub(crate) priority: Priority
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) priority: Option<Priority>
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum FileTree {
-    SingleFile {
-        file_info: FileInfo
-    },
-    MultiFile {
-        files: HashMap<String, FileInfo>
-    }
-}
 
 impl Torrent {
     pub const MAX_CONCURRENT: usize = 4;
@@ -82,21 +77,34 @@ impl Torrent {
         let info = &self.info;
         let info_raw = serde_bencode::to_bytes(&info).expect("Invalid info dictionary");
         let decoded = serde_bencode::from_bytes::<Info>(&info_raw).expect("Bad info");
-        println!("{:?}", decoded);
+        eprintln!("Decoded info {:?}", decoded);
         let mut hasher = Sha1::new();
         hasher.update(info_raw);
         return hasher.finalize().into();
     }
     
     pub(crate) fn get_number_of_pieces(&self) -> usize {
-        let number_of_pieces = self.info.length as f64 / self.info.piece_length as f64;
+        let number_of_pieces = self.info.length() as f64 / self.info.piece_length.unwrap() as f64;
         return number_of_pieces.ceil() as usize;
     }
     
     fn get_number_of_blocks(&self) -> usize {
-        return  self.info.piece_length / (1<<14);
+        return  self.info.piece_length.unwrap() / (1<<14);
     }
 
+}
+
+impl Info {
+    pub fn length(&self) -> usize {
+        match self.length {
+            Some(length) => length,
+            None => {
+                self.files.as_ref().unwrap().iter().fold(0, |acc, file| {
+                    acc + file.length
+                })
+            }
+        }
+    }
 }
 
 

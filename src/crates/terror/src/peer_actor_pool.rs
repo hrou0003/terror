@@ -1,10 +1,6 @@
 use std::net::IpAddr;
 use kanal::{AsyncReceiver};
-use tokio::io;
-use tokio::io::AsyncWriteExt;
-
-use tokio::sync::mpsc::{Receiver, Sender};
-use uuid::Uuid;
+use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 
 use crate::peer::{Peer, PeerState};
 use crate::peer_actor::{PeerActorHandle, PeerMessage};
@@ -19,7 +15,7 @@ pub struct PeerActorPool {
 }
 
 impl PeerActorPool {
-    pub async fn new(torrent: &Torrent, task_queue: AsyncReceiver<DownloadBlock>, completed_task_tx: Sender<CompletedTask>) -> anyhow::Result<Self> {
+    pub async fn new(torrent: &Torrent, task_queue: AsyncReceiver<DownloadBlock>, completed_task_tx: UnboundedSender<CompletedTask>) -> anyhow::Result<Self> {
         let info_hash = torrent.calculate_info_hash();
         let encoded_info_hash = percent_encode_hash(hex::encode(info_hash.to_vec()).as_str());
 
@@ -28,7 +24,7 @@ impl PeerActorPool {
             port: 6881,
             uploaded: 0,
             downloaded: 0,
-            left: torrent.info.length,
+            left: torrent.info.length.unwrap_or(0),
             compact: 1,
         };
 
@@ -45,7 +41,7 @@ impl PeerActorPool {
         println!("Raw response: {}", String::from_utf8_lossy(&response));
         println!("Hex-encoded response: {}", hex::encode(&response));
 
-        let tracker: TrackerResponse = serde_bencode::from_bytes(&response)?;
+        let tracker: TrackerResponse = serde_bencode::from_bytes(response.to_vec().as_slice())?;
 
         let peers: Vec<Peer> = tracker.peers.iter().map(|peer| {
             Peer {

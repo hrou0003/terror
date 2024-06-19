@@ -2,12 +2,12 @@ use std::time::Duration;
 use tokio::time::Instant;
 use terror::Torrent;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() {
     console_subscriber::init();
     let start_time = Instant::now();
 
-    let torrent = Torrent::new("test/sample.torrent".to_string());
+    let torrent = Torrent::new("test/downloads-d98540da6d34fb6a0150fd88b41580a377cb454d.torrent".to_string());
     let mut torrent_manager = terror::TorrentManager::new(torrent).await;
 
     torrent_manager.run().await;

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::sync::mpsc::UnboundedReceiver;
 use crate::Torrent;
 use crate::torrent::FileInfo;
 use crate::torrent_manager::{CompletedTask, DownloadBlock};
@@ -71,7 +72,7 @@ pub(crate) struct PiecePool {
     pub(crate) pieces: HashMap<usize, Piece>,
     torrent: Torrent,
     task_tx: AsyncSender<DownloadBlock>,
-    completed_task_rx: mpsc::Receiver<CompletedTask>,
+    completed_task_rx: UnboundedReceiver<CompletedTask>,
     piece_peer_map: HashMap<usize, HashSet<String>>,
 }
 
@@ -118,8 +119,8 @@ impl Piece {
                         piece_bytes[start_index..].to_vec()
                     } else if end_piece == self.index {
                         // Check where to end 
-                        let end_index = (file_info.length % Self::PIECE_SIZE as usize);
-                        piece_bytes[..end_index].to_vec()
+                        let end_index = Self::PIECE_SIZE as usize - file_info.offset.unwrap_or(0);
+                        piece_bytes[..].to_vec()
                     } else {
                         // Write all of the bytes
                         piece_bytes.clone()
@@ -154,15 +155,15 @@ impl Piece {
 }
 
 impl PiecePool {
-    pub(crate) fn new(torrent: &Torrent, task_tx: AsyncSender<DownloadBlock>, completed_task_rx: mpsc::Receiver<CompletedTask>) -> anyhow::Result<Self> {
-        let number_of_pieces = (torrent.info.length as f64 / torrent.info.piece_length as f64).ceil() as usize;
+    pub(crate) fn new(torrent: &Torrent, task_tx: AsyncSender<DownloadBlock>, completed_task_rx: UnboundedReceiver<CompletedTask>) -> anyhow::Result<Self> {
+        let number_of_pieces = (torrent.info.length() as f64 / torrent.info.piece_length.unwrap() as f64).ceil() as usize;
         let block_size = 1 << 14;
 
         let pieces = (0..number_of_pieces).map(|index| {
             let length = if index == number_of_pieces - 1 {
-                torrent.info.length % torrent.info.piece_length
+                torrent.info.length() % torrent.info.piece_length.unwrap()
             } else {
-                torrent.info.piece_length
+                torrent.info.piece_length.unwrap()
             };
 
             let number_of_blocks = (length + block_size - 1) / block_size;
@@ -196,7 +197,7 @@ impl PiecePool {
                     }
                     ).cloned().collect()
                 }
-                None => vec![FileInfo { start_piece: Some(0), end_piece: Some(torrent.get_number_of_pieces() - 1), offset: Some(0), priority: Priority::default(), length: torrent.info.length, path: vec![torrent.info.name.to_string()], name: Some(torrent.info.name.to_string()), md5sum: torrent.info.md5hash.clone() }]
+                None => vec![FileInfo { start_piece: Some(0), end_piece: Some(torrent.get_number_of_pieces() - 1), offset: Some(0), priority: Some(Priority::default()), length: torrent.info.length(), path: vec![torrent.info.name.to_string()], name: Some(torrent.info.name.to_string()), md5sum: torrent.info.md5hash.clone() }]
             };
 
             (index, Piece {
@@ -224,6 +225,7 @@ impl PiecePool {
 
         // Queue up the first 10 pieces
         self.queue_n_tasks(5).await;
+        let mut downloaded_pieces: Vec<usize> = vec![];
 
         // Start listening on the response channel
         loop {
@@ -260,6 +262,8 @@ impl PiecePool {
                                     // Queue more pieces to download
                                     let number_of_queued_pieces = self.queue_n_tasks(5).await;
                                     // Check if all pieces are downloaded
+                                    downloaded_pieces.insert(0, piece_index);
+                                    println!("Downloaded pieces: {:?}", downloaded_pieces);
                                     if self.all_pieces_downloaded().unwrap() {
                                         self.task_tx.close();
                                         return;
@@ -274,6 +278,21 @@ impl PiecePool {
                 }
                 CompletedTask::FailedBlock { piece_index, block_index } => {
                     println!("Failed to download block {} of piece {}", block_index, piece_index);
+                    // Requeue the block
+                    // Get the block
+                    let piece = self.pieces.iter().find(|(&index, piece)| {
+                        index == piece_index
+                    });
+                    let block = piece.unwrap().1.blocks.iter().find(|&block| {
+                        block.index == block_index
+                    }).unwrap();
+                    
+                    self.task_tx.send(DownloadBlock {
+                        piece_index,
+                        block_index,
+                        begin: block.begin,
+                        length: block.block_size
+                    }).await.unwrap();
                 }
             }
         }

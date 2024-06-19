@@ -42,7 +42,7 @@ impl TorrentManager {
             .collect();
         
         let (task_queue_sender, task_queue) = kanal::bounded_async::<DownloadBlock>(32); 
-        let (completed_task_tx, completed_task_rx) = tokio::sync::mpsc::channel(32);
+        let (completed_task_tx, completed_task_rx) = tokio::sync::mpsc::unbounded_channel();
         let peer_actor_pool = PeerActorPool::new(&torrent_info, task_queue, completed_task_tx).await.unwrap();
         let piece_pool = PiecePool::new(&torrent_info, task_queue_sender, completed_task_rx).unwrap();
         
@@ -85,7 +85,7 @@ mod tests
     #[test]
     async fn main() {
         
-        let torrent = Torrent::new("test/BuzzFeedNewstranscriptionofAirbnbNYCdata.xlsx-968a3ff5e4182cdecd239980ecfd257a37451003.torrent".to_string());
+        let torrent = Torrent::new("test/mnist-ce990b28668abf16480b8b906640a6cd7e3b8b21.torrent".to_string());
         let mut torrent_manager = TorrentManager::new(torrent).await;
 
         torrent_manager.run().await;
