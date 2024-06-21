@@ -1,6 +1,7 @@
 use std::net::IpAddr;
 use kanal::{AsyncReceiver};
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
+use tracing::{debug, info};
 
 use crate::peer::{Peer, PeerState};
 use crate::peer_actor::{PeerActorHandle, PeerMessage};
@@ -35,11 +36,12 @@ impl PeerActorPool {
             torrent.announce, request_params, encoded_info_hash
         );
 
-        println!("Making request to {}", request_url);
+        info!("Getting peers from tracker");
+        debug!("Making request to {}", request_url);
 
         let response = reqwest::get(request_url).await?.bytes().await?;
-        println!("Raw response: {}", String::from_utf8_lossy(&response));
-        println!("Hex-encoded response: {}", hex::encode(&response));
+        debug!("Raw response: {}", String::from_utf8_lossy(&response));
+        debug!("Hex-encoded response: {}", hex::encode(&response));
 
         let tracker: TrackerResponse = serde_bencode::from_bytes(response.to_vec().as_slice())?;
 
@@ -67,6 +69,7 @@ impl PeerActorPool {
     }
 
     pub async fn run(&self) {
+        info!("Connecting to peers");
         for actor in self.actors.iter() {
             actor.sender.send(PeerMessage::Listen).await.unwrap();
         }

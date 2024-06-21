@@ -11,6 +11,7 @@ use sha1::{Digest, Sha1};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::mpsc::UnboundedReceiver;
+use tracing::{debug, info};
 use crate::Torrent;
 use crate::torrent::FileInfo;
 use crate::torrent_manager::{CompletedTask, DownloadBlock};
@@ -263,7 +264,7 @@ impl PiecePool {
                                     let number_of_queued_pieces = self.queue_n_tasks(5).await;
                                     // Check if all pieces are downloaded
                                     downloaded_pieces.insert(0, piece_index);
-                                    println!("Downloaded pieces: {:?}", downloaded_pieces);
+                                    info!("Downloaded: {:?}%", (downloaded_pieces.len() as f32 / self.pieces.len() as f32) * 100 as f32);
                                     if self.all_pieces_downloaded().unwrap() {
                                         self.task_tx.close();
                                         return;
@@ -277,7 +278,7 @@ impl PiecePool {
                     }
                 }
                 CompletedTask::FailedBlock { piece_index, block_index } => {
-                    println!("Failed to download block {} of piece {}", block_index, piece_index);
+                    debug!("Failed to download block {} of piece {}", block_index, piece_index);
                     // Requeue the block
                     // Get the block
                     let piece = self.pieces.iter().find(|(&index, piece)| {

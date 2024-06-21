@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, MutexGuard};
+use tracing::debug;
 
 use crate::torrent::{Torrent};
 
@@ -57,20 +58,20 @@ impl Handshake {
         
         if stream.ready(tokio::io::Interest::READABLE).await?.is_readable() {
             // The stream is readable, proceed with reading
-            eprintln!("Reading bytes");
+            debug!("Reading bytes");
             match stream.read_exact(&mut bytes).await {
                 Ok(_) => {
-                    eprintln!("Read bytes: {:?}", bytes);
+                    debug!("Read bytes: {:?}", bytes);
                 }
                 Err(e) => {
-                    eprintln!("Error reading bytes: {:?}", e);
+                    debug!("Error reading bytes: {:?}", e);
                     return Err(e);
                 }
             };
             // Process the read bytes
         } else {
             // The stream is not readable, handle accordingly
-            println!("Stream is not readable");
+            debug!("Stream is not readable");
         }
 
         let length = bytes[0];
@@ -110,18 +111,18 @@ impl Handshake {
         let mut handshake = Handshake::new(info_hash, peer_id);
         let handshake_bytes = handshake.to_bytes();
         
-        eprintln!("Send handshake request {}", hex::encode(handshake_bytes));
+        debug!("Send handshake request {}", hex::encode(handshake_bytes));
         stream.write_all(&handshake_bytes).await?;
 
         let received_handshake = match Handshake::from_stream(stream).await {
             Ok(handshake) => handshake,
             Err(e) => {
-                eprintln!("Error reading handshake: {:?}", e);
+                debug!("Error reading handshake: {:?}", e);
                 return Err(anyhow::anyhow!("Error reading handshake"));
             }
         };
 
-        println!("Handshake completed on: {}", hex::encode(received_handshake.peer_id));
+        debug!("Handshake completed on: {}", hex::encode(received_handshake.peer_id));
 
         Ok(received_handshake)
     }

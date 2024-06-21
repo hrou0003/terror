@@ -1,10 +1,17 @@
 use std::time::Duration;
 use tokio::time::Instant;
+use tracing::{info, Level};
+use tracing::level_filters::LevelFilter;
 use terror::Torrent;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 16)]
+#[tracing::instrument(ret)]
 async fn main() {
-    console_subscriber::init();
+    // console_subscriber::init();
+    
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .init();
     let start_time = Instant::now();
 
     let torrent = Torrent::new("test/downloads-d98540da6d34fb6a0150fd88b41580a377cb454d.torrent".to_string());
@@ -14,5 +21,5 @@ async fn main() {
     
     let end_time = start_time.elapsed();
     
-    println!("Torrent completed in {}", end_time.as_secs_f32())
+    info!("Torrent completed in {}", end_time.as_secs_f32())
 }

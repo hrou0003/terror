@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::join;
 use tokio::sync::Mutex;
+use tracing::{debug, info};
 
 use crate::peer_actor_pool::PeerActorPool;
 use crate::piece::PiecePool;
@@ -69,7 +70,7 @@ impl TorrentManager {
         pool.start().await;
 
         let _ = join!(peer_actor_pool_handle);
-        eprintln!("Torrent downloaded")
+        debug!("Torrent downloaded")
         
     }
 }

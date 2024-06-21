@@ -5,6 +5,7 @@ use std::sync::{Arc};
 use std::time::Duration;
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::{RwLock, Mutex}};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf, ReadHalf, WriteHalf};
+use tracing::debug;
 use crate::peer::Peer;
 use crate::torrent::{Info, Torrent};
 
@@ -81,14 +82,14 @@ impl Message {
     
     pub(crate) async fn send_message(message: Message, stream: &mut tokio::net::TcpStream) -> anyhow::Result<()> {
         let payload = Self::encode(&message)?;
-        eprintln!("Sending message {}", message.type_byte());
+        debug!("Sending message {}", message.type_byte());
         stream.write(&payload).await?;
         return Ok(());
     }
 
     pub(crate) async fn send_message_write_half<'a>(message: Message, stream: Arc<Mutex<OwnedWriteHalf>>) -> anyhow::Result<()> {
         let payload = Self::encode(&message)?;
-        eprintln!("Sending message {}", message.type_byte());
+        debug!("Sending message {}", message.type_byte());
         let mut stream = stream.lock().await;
         stream.write_all(&payload).await?;
         return Ok(());
@@ -106,7 +107,7 @@ impl Message {
 
         let message_type = stream.read_u8().await?;
         
-        eprintln!("Reading message {}", message_type);
+        debug!("Reading message {}", message_type);
 
         let len = u32::from_be_bytes(length_bytes) as usize;
 
@@ -154,7 +155,7 @@ impl Message {
 
         let message_type = stream.read_u8().await?;
 
-        eprintln!("Reading message {}", message_type);
+        debug!("Reading message {}", message_type);
 
         let len = u32::from_be_bytes(length_bytes) as usize;
 

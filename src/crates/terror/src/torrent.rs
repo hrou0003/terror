@@ -3,6 +3,7 @@ use std::fs;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use sha1::{Digest, Sha1};
+use tracing::debug;
 
 use crate::piece::Priority;
 
@@ -77,7 +78,7 @@ impl Torrent {
         let info = &self.info;
         let info_raw = serde_bencode::to_bytes(&info).expect("Invalid info dictionary");
         let decoded = serde_bencode::from_bytes::<Info>(&info_raw).expect("Bad info");
-        eprintln!("Decoded info {:?}", decoded);
+        debug!("Decoded info {:?}", decoded);
         let mut hasher = Sha1::new();
         hasher.update(info_raw);
         return hasher.finalize().into();

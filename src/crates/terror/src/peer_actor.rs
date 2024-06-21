@@ -9,6 +9,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{Mutex, Notify, oneshot};
 use tokio::sync::mpsc::{Sender, UnboundedSender};
 use tokio::task;
+use tracing::debug;
 use crate::peer::{Peer};
 use crate::torrent_manager::{CompletedTask, DownloadBlock};
 use crate::handshake::Handshake;
@@ -160,7 +161,7 @@ impl PeerActor {
     async fn connect(&mut self) -> anyhow::Result<()> {
         match &self.peer_actor_state {
             PeerActorState::Connected { .. } => {
-                println!("Peer {} is already connected", self.peer.id);
+                debug!("Peer {} is already connected", self.peer.id);
                 Ok(())
             }
             PeerActorState::Disconnected => {
@@ -181,7 +182,7 @@ impl PeerActor {
                     },
                     Ok(_) => Err(anyhow::anyhow!("Unexpected message")),
                     Err(e) => {
-                        eprintln!("Error reading message: {}", e);
+                        debug!("Error reading message: {}", e);
                         Err(anyhow::anyhow!("Couldn't connect"))
                     }
                 }
@@ -193,14 +194,14 @@ impl PeerActor {
         match &self.peer_actor_state {
             PeerActorState::Connected { .. } => Ok(()),
             PeerActorState::Disconnected => {
-                println!("Peer is not connected");
-                println!("Reconnecting");
+                debug!("Peer is not connected");
+                debug!("Reconnecting");
                 if let Ok(_) = self.connect().await {
-                    println!("Reconnected");
+                    debug!("Reconnected");
                     Ok(())
                 } else {
-                    println!("Failed to reconnect");
-                    println!("Broken peer");
+                    debug!("Failed to reconnect");
+                    debug!("Broken peer");
                     Err(anyhow!("Broken peer"))
                 }
             }
@@ -211,7 +212,7 @@ impl PeerActor {
 async fn run_peer_actor(mut actor: PeerActor) {
     while let Ok(msg) = actor.receiver.recv().await {
         if let Err(e) = actor.handle_message(msg).await {
-            eprintln!("Error handling message: {}", e);
+            debug!("Error handling message: {}", e);
             if let PeerActorState::Connected { writer, .. } = &actor.peer_actor_state {
                 let mut locked_writer = writer.lock().await;
                 let _ = locked_writer.shutdown().await;
