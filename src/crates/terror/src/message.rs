@@ -1,8 +1,10 @@
 use std::fmt::Debug;
+use std::net::TcpStream;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc};
 use std::time::Duration;
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::{RwLock, Mutex}};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf, ReadHalf, WriteHalf};
 use crate::peer::Peer;
 use crate::torrent::{Info, Torrent};
 
@@ -84,6 +86,14 @@ impl Message {
         return Ok(());
     }
 
+    pub(crate) async fn send_message_write_half<'a>(message: Message, stream: Arc<Mutex<OwnedWriteHalf>>) -> anyhow::Result<()> {
+        let payload = Self::encode(&message)?;
+        eprintln!("Sending message {}", message.type_byte());
+        let mut stream = stream.lock().await;
+        stream.write_all(&payload).await?;
+        return Ok(());
+    }
+
 
     pub(crate) async fn read_message(stream: &mut tokio::net::TcpStream) -> anyhow::Result<Message> {
         let mut length_bytes = [0; 4];
@@ -131,6 +141,55 @@ impl Message {
         }
 
     }
+
+    pub(crate) async fn read_message_write_half<'a>(stream: Arc<Mutex<OwnedReadHalf>>) -> anyhow::Result<Message> {
+        let mut stream = stream.lock().await;
+        let mut length_bytes = [0; 4];
+
+        stream.read_exact(&mut length_bytes).await?;
+
+        while u32::from_be_bytes(length_bytes) == 0 {
+            stream.read_exact(&mut length_bytes).await?;
+        }
+
+        let message_type = stream.read_u8().await?;
+
+        eprintln!("Reading message {}", message_type);
+
+        let len = u32::from_be_bytes(length_bytes) as usize;
+
+        let mut payload = match len {
+            0 => Vec::new(),
+            1 => Vec::new(),
+            _ => vec![0; len - 1],
+        };
+
+        stream.read_exact(&mut payload).await?;
+
+        match message_type {
+            2 => Ok(Message::Interested),
+            1 => Ok(Message::Unchoke),
+            5 => {
+                let bitfield = payload;
+                Ok(Message::Bitfield { bitfield })
+            },
+            6 => {
+                let index = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                let begin = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                let length = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]);
+                Ok(Message::Request { index, begin, length })
+            },
+            7 => {
+                let index = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                let begin = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                let block = payload[8..].to_vec();
+                Ok(Message::Piece { index, begin, block })
+            },
+            t => Err(anyhow::anyhow!("Unknown message type {t}")),
+        }
+
+    }
+
 }
 
 mod tests {
