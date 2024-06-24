@@ -2,17 +2,18 @@ use std::net::IpAddr;
 use kanal::{AsyncReceiver};
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 use tracing::{debug, info};
+use crate::peer::peer::{CycleMessage, Peer, PeerState};
+use crate::peer::peer_actor::{PeerActorHandle, PeerMessage};
+use crate::torrent::torrent_info::Torrent;
+use crate::torrent::torrent_manager::{CompletedTask, DownloadBlock};
+use crate::utils::utils::{percent_encode_hash, TrackerRequest, TrackerResponse};
 
-use crate::peer::{Peer, PeerState};
-use crate::peer_actor::{PeerActorHandle, PeerMessage};
-use crate::Torrent;
-use crate::torrent_manager::{CompletedTask, DownloadBlock};
-use crate::utils::{percent_encode_hash, TrackerRequest, TrackerResponse};
 
+#[derive()]
 pub struct PeerActorPool {
     pub(crate) actors: Vec<PeerActorHandle>,
     task_queue: AsyncReceiver<DownloadBlock>,
-    cycle_peer_tx: Receiver<crate::peer::CycleMessage>,
+    cycle_peer_tx: Receiver<CycleMessage>,
 }
 
 impl PeerActorPool {

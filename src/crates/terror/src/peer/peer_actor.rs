@@ -10,17 +10,17 @@ use tokio::sync::{Mutex, Notify, oneshot};
 use tokio::sync::mpsc::{Sender, UnboundedSender};
 use tokio::task;
 use tracing::debug;
-use crate::peer::{Peer};
-use crate::torrent_manager::{CompletedTask, DownloadBlock};
-use crate::handshake::Handshake;
-use crate::message::Message;
+use crate::peer::handshake::Handshake;
+use crate::peer::message::Message;
+use crate::peer::peer::{CycleMessage, Peer};
+use crate::torrent::torrent_manager::{CompletedTask, DownloadBlock};
 
 pub struct PeerActor {
     peer: Peer,
     receiver: AsyncReceiver<PeerMessage>,
     task_queue: AsyncReceiver<DownloadBlock>,
     completed_task_tx: UnboundedSender<CompletedTask>,
-    cycle_tx: Sender<crate::peer::CycleMessage>,
+    cycle_tx: Sender<CycleMessage>,
     peer_actor_state: PeerActorState,
     tasks_notify: Arc<Notify>,
     tasks_count: Arc<AtomicUsize>,
@@ -66,7 +66,7 @@ pub enum PeerMessage {
 }
 
 impl PeerActor {
-    pub fn new(ip_addr: IpAddr, port: u16, info_hash: [u8; 20], receiver: AsyncReceiver<PeerMessage>, task_queue: AsyncReceiver<DownloadBlock>, completed_task_tx: UnboundedSender<CompletedTask>, cycle_tx: Sender<crate::peer::CycleMessage>) -> Self {
+    pub fn new(ip_addr: IpAddr, port: u16, info_hash: [u8; 20], receiver: AsyncReceiver<PeerMessage>, task_queue: AsyncReceiver<DownloadBlock>, completed_task_tx: UnboundedSender<CompletedTask>, cycle_tx: Sender<CycleMessage>) -> Self {
         let peer = Peer::new(ip_addr, port, info_hash);
 
         PeerActor {
@@ -227,7 +227,7 @@ pub struct PeerActorHandle {
 }
 
 impl PeerActorHandle {
-    pub fn new(ip_addr: IpAddr, port: u16, info_hash: [u8; 20], task_queue: AsyncReceiver<DownloadBlock>, completed_task_tx: UnboundedSender<CompletedTask>, cycle_tx: Sender<crate::peer::CycleMessage>) -> Self {
+    pub fn new(ip_addr: IpAddr, port: u16, info_hash: [u8; 20], task_queue: AsyncReceiver<DownloadBlock>, completed_task_tx: UnboundedSender<CompletedTask>, cycle_tx: Sender<CycleMessage>) -> Self {
         let (sender, receiver) = kanal::bounded_async(8);
         let actor = PeerActor::new(ip_addr, port, info_hash, receiver, task_queue, completed_task_tx, cycle_tx);
         tokio::spawn(run_peer_actor(actor));

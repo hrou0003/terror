@@ -37,4 +37,6 @@ sha1 = "0.10.1"                                                    # hashing
 tempfile = "3"                                                     # creating temporary directories
 thiserror = "1.0.38"                                               # error handling
 tokio = { version = "1.23.0", features = ["full"] }
-uuid = { version = "1.8.0", features = ["v4"] }                # async http requests
+uuid = { version = "1.8.0", features = ["v4"] }
+tracing = "0.1.37"
+tracing-subscriber = "0.3.18"                # async http requests

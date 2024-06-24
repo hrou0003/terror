@@ -2,7 +2,8 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tracing::{info, Level};
 use tracing::level_filters::LevelFilter;
-use terror::Torrent;
+use terror::torrent::torrent_info::Torrent;
+use terror::torrent::torrent_manager::TorrentManager;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 #[tracing::instrument(ret)]
@@ -15,7 +16,7 @@ async fn main() {
     let start_time = Instant::now();
 
     let torrent = Torrent::new("test/downloads-d98540da6d34fb6a0150fd88b41580a377cb454d.torrent".to_string());
-    let mut torrent_manager = terror::TorrentManager::new(torrent).await;
+    let mut torrent_manager = TorrentManager::new(torrent).await;
 
     torrent_manager.run().await;
     
