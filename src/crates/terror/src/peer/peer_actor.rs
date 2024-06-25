@@ -2,6 +2,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use anyhow::anyhow;
+use futures_util::{SinkExt, StreamExt};
 use kanal::{AsyncReceiver, AsyncSender};
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use tokio::net::TcpStream;
@@ -9,10 +10,12 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{Mutex, Notify, oneshot};
 use tokio::sync::mpsc::{Sender, UnboundedSender};
 use tokio::task;
+use tokio_util::codec::Framed;
 use tracing::debug;
 use crate::peer::handshake::Handshake;
-use crate::peer::message::Message;
 use crate::peer::peer::{CycleMessage, Peer};
+use crate::tcp::message::Message;
+use crate::tcp::bittorrent_code::BitTorrentCodec;
 use crate::torrent::torrent_manager::{CompletedTask, DownloadBlock};
 
 pub struct PeerActor {
@@ -28,31 +31,22 @@ pub struct PeerActor {
 
 pub enum PeerActorState {
     Connected {
-        reader: Arc<Mutex<OwnedReadHalf>>,
-        writer: Arc<Mutex<OwnedWriteHalf>>,
+        framed: Arc<Mutex<Framed<TcpStream, BitTorrentCodec>>>,
     },
     Disconnected,
 }
 
 impl PeerActorState {
     fn new_connected(stream: TcpStream) -> Self {
-        let (reader, writer) = stream.into_split();
+        let framed = Framed::new(stream, BitTorrentCodec);
         PeerActorState::Connected {
-            reader: Arc::new(Mutex::new(reader)),
-            writer: Arc::new(Mutex::new(writer)),
+            framed: Arc::new(Mutex::new(framed)),
         }
     }
 
-    fn get_reader(&self) -> Option<Arc<Mutex<OwnedReadHalf>>> {
+    fn get_framed(&self) -> Option<Arc<Mutex<Framed<TcpStream, BitTorrentCodec>>>> {
         match self {
-            PeerActorState::Connected { reader, .. } => Some(Arc::clone(reader)),
-            PeerActorState::Disconnected => None,
-        }
-    }
-
-    fn get_writer(&self) -> Option<Arc<Mutex<OwnedWriteHalf>>> {
-        match self {
-            PeerActorState::Connected { writer, .. } => Some(Arc::clone(writer)),
+            PeerActorState::Connected { framed } => Some(Arc::clone(framed)),
             PeerActorState::Disconnected => None,
         }
     }
@@ -82,8 +76,8 @@ impl PeerActor {
 
     pub async fn send_messages(&self) {
         let task_queue = self.task_queue.clone();
-        let writer = match self.peer_actor_state.get_writer() {
-            Some(w) => w,
+        let framed = match self.peer_actor_state.get_framed() {
+            Some(f) => f,
             None => return,
         };
         let tasks_count = Arc::clone(&self.tasks_count);
@@ -91,9 +85,13 @@ impl PeerActor {
 
         task::spawn(async move {
             while let Ok(task) = task_queue.recv().await {
-                let writer = writer.clone();
-                let message = Message::Request { index: task.piece_index as u32, begin: task.begin as u32, length: task.length as u32};
-                if let Ok(_) = Message::send_message_write_half(message, writer).await {
+                let mut framed = framed.lock().await;
+                let message = Message::Request {
+                    index: task.piece_index as u32,
+                    begin: task.begin as u32,
+                    length: task.length as u32
+                };
+                if framed.send(message).await.is_ok() {
                     tasks_count.fetch_add(1, Ordering::SeqCst);
                 }
                 if tasks_count.load(Ordering::SeqCst) > 5 {
@@ -103,10 +101,11 @@ impl PeerActor {
         });
     }
 
+
     pub async fn read_messages(&self) {
         let completed_task_tx = self.completed_task_tx.clone();
-        let reader = match self.peer_actor_state.get_reader() {
-            Some(r) => r,
+        let framed = match self.peer_actor_state.get_framed() {
+            Some(f) => f,
             None => return,
         };
         let tasks_count = Arc::clone(&self.tasks_count);
@@ -117,11 +116,11 @@ impl PeerActor {
                 tasks_notify.notified().await;
             }
 
-            let reader = reader.clone();
-            let message = Message::read_message_write_half(reader).await;
+            let mut framed = framed.lock().await;
+            let message = framed.next().await;
 
             match message {
-                Ok(Message::Piece { index, begin, block }) => {
+                Some(Ok(Message::Piece { index, begin, block })) => {
                     completed_task_tx.send(CompletedTask::DownloadedBlock {
                         piece_index: index as usize,
                         block_index: (begin / (1 << 14)) as usize,
@@ -129,13 +128,14 @@ impl PeerActor {
                     }).unwrap();
                     tasks_count.fetch_sub(1, Ordering::SeqCst);
                 },
-                Ok(_) => {},
-                Err(_) => {
+                Some(Ok(_)) => {},
+                Some(Err(_)) | None => {
                     completed_task_tx.send(CompletedTask::FailedBlock {
                         piece_index: 0,
                         block_index: 0,
                     }).unwrap();
                     tasks_count.fetch_sub(1, Ordering::SeqCst);
+                    break;  // Exit the loop on error or end of stream
                 }
             }
         }
@@ -166,25 +166,38 @@ impl PeerActor {
             }
             PeerActorState::Disconnected => {
                 let mut stream = TcpStream::connect((self.peer.ip_addr, self.peer.port)).await?;
-                let _ = Handshake::handshake(self.peer.info_hash, &mut stream).await;
-                match Message::read_message(&mut stream).await? {
-                    Message::Bitfield { .. } => {
-                        let request = Message::Interested;
-                        Message::send_message(request, &mut stream).await?;
+
+                // Perform handshake manually
+                let mut handshake = Handshake::new(self.peer.info_hash, *b"00112233445566778899");
+                let handshake_bytes = handshake.to_bytes();
+                stream.write_all(&handshake_bytes).await?;
+
+                let received_handshake = Handshake::from_stream(&mut stream).await?;
+                debug!("Handshake completed on: {}", hex::encode(received_handshake.peer_id));
+
+                // Switch to BitTorrent codec
+                let mut framed = Framed::new(stream, BitTorrentCodec);
+
+                // Expect bitfield
+                match framed.next().await {
+                    Some(Ok(Message::Bitfield { .. })) => {
+                        framed.send(Message::Interested).await?;
                     },
-                    _ => return Err(anyhow::anyhow!("Didn't receive bitfield")),
+                    _ => return Err(anyhow!("Didn't receive bitfield")),
                 }
 
-                match Message::read_message(&mut stream).await {
-                    Ok(Message::Unchoke) => {
-                        self.peer_actor_state = PeerActorState::new_connected(stream);
+                // Expect unchoke
+                match framed.next().await {
+                    Some(Ok(Message::Unchoke)) => {
+                        self.peer_actor_state = PeerActorState::Connected { framed: Arc::new(Mutex::new(framed)) };
                         Ok(())
                     },
-                    Ok(_) => Err(anyhow::anyhow!("Unexpected message")),
-                    Err(e) => {
+                    Some(Ok(_)) => Err(anyhow!("Unexpected message")),
+                    Some(Err(e)) => {
                         debug!("Error reading message: {}", e);
-                        Err(anyhow::anyhow!("Couldn't connect"))
-                    }
+                        Err(anyhow!("Couldn't connect"))
+                    },
+                    None => Err(anyhow!("Connection closed unexpectedly")),
                 }
             }
         }
@@ -213,10 +226,6 @@ async fn run_peer_actor(mut actor: PeerActor) {
     while let Ok(msg) = actor.receiver.recv().await {
         if let Err(e) = actor.handle_message(msg).await {
             debug!("Error handling message: {}", e);
-            if let PeerActorState::Connected { writer, .. } = &actor.peer_actor_state {
-                let mut locked_writer = writer.lock().await;
-                let _ = locked_writer.shutdown().await;
-            }
             break;
         }
     }

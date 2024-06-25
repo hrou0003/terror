@@ -10,6 +10,7 @@ pub(crate) mod peer;
 
 mod piece;
 mod utils;
+pub(crate) mod tcp;
 
 
 pub use {

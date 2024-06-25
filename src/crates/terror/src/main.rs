@@ -12,6 +12,7 @@ async fn main() {
     
     tracing_subscriber::fmt()
         .with_target(false)
+        .with_max_level(LevelFilter::DEBUG)
         .init();
     let start_time = Instant::now();
 
