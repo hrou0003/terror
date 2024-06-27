@@ -10,6 +10,7 @@ impl Decoder for BitTorrentCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        
         if src.len() < 4 {
             return Ok(None);
         }
