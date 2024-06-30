@@ -5,7 +5,7 @@ use tracing::{debug, info};
 use crate::peer::peer::{CycleMessage, Peer, PeerState};
 use crate::peer::peer_actor::{PeerActorHandle, PeerMessage};
 use crate::torrent::torrent_info::Torrent;
-use crate::torrent::torrent_manager::{CompletedTask, DownloadBlock};
+use crate::torrent::torrent_downloader::{CompletedTask, DownloadBlock};
 use crate::utils::utils::{percent_encode_hash, TrackerRequest, TrackerResponse};
 
 

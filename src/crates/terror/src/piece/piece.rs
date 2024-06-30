@@ -14,7 +14,7 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, info};
 use crate::torrent::torrent_info::{FileInfo, Torrent};
-use crate::torrent::torrent_manager::{CompletedTask, DownloadBlock};
+use crate::torrent::torrent_downloader::{CompletedTask, DownloadBlock};
 
 pub(crate) struct Piece {
     pub(crate) index: usize,

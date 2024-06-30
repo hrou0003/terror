@@ -1,19 +1,24 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use bytes::Bytes;
 use kanal::AsyncSender;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::Notify;
 use tracing::{debug, info};
 use crate::piece::piece::{Block, BlockState, Piece, PieceState, Priority};
 use crate::torrent::torrent_info::{FileInfo, Torrent};
-use crate::torrent::torrent_manager::{CompletedTask, DownloadBlock};
+use crate::torrent::torrent_downloader::{CompletedTask, DownloadBlock};
 
-pub(crate) struct PiecePool {
-    pub(crate) pieces: HashMap<usize, Piece>,
+pub struct PiecePool {
+    pieces: HashMap<usize, Piece>,
     torrent: Torrent,
     task_tx: AsyncSender<DownloadBlock>,
     completed_task_rx: UnboundedReceiver<CompletedTask>,
     piece_peer_map: HashMap<usize, HashSet<String>>,
+    paused: Arc<AtomicBool>,
+    pause_notify: Arc<Notify>,
 }
 
 impl PiecePool {
@@ -78,6 +83,8 @@ impl PiecePool {
             pieces,
             torrent: torrent.clone(),
             piece_peer_map: HashMap::new(),
+            paused: Arc::new(AtomicBool::new(false)),
+            pause_notify: Arc::new(Notify::new()),
             task_tx,
             completed_task_rx,
         })
@@ -125,7 +132,7 @@ impl PiecePool {
                                     let number_of_queued_pieces = self.queue_n_tasks(5).await;
                                     // Check if all pieces are downloaded
                                     downloaded_pieces.insert(0, piece_index);
-                                    info!("Downloaded: {:?}%", (downloaded_pieces.len() as f32 / self.pieces.len() as f32) * 100 as f32);
+                                    info!("{} Downloaded: {:?}%", self.torrent.info.name, (downloaded_pieces.len() as f32 / self.pieces.len() as f32) * 100 as f32);
                                     if self.all_pieces_downloaded().unwrap() {
                                         self.task_tx.close();
                                         return;
@@ -234,5 +241,27 @@ impl PiecePool {
 
     pub fn all_pieces_downloaded(&self) -> Option<bool> {
         Some(self.pieces.iter().all(|(_, piece)| piece.piece_state == PieceState::Saved))
+    }
+
+    pub async fn pause(&mut self) -> anyhow::Result<()> {
+        debug!("Pausing PiecePool");
+        self.paused.store(true, Ordering::SeqCst);
+        self.pause_notify.notify_one();
+        Ok(())
+    }
+
+    pub async fn resume(&mut self) -> anyhow::Result<()> {
+        debug!("Resuming PiecePool");
+        self.paused.store(false, Ordering::SeqCst);
+        self.pause_notify.notify_one();
+        Ok(())
+    }
+    
+    pub fn get_progress(&self) -> f64 {
+        let total_pieces = self.pieces.len();
+        let downloaded_pieces = self.pieces.values()
+            .filter(|p| matches!(p.piece_state, PieceState::Saved))
+            .count();
+        (downloaded_pieces as f64 / total_pieces as f64) * 100.0
     }
 }

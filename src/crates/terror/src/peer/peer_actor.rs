@@ -16,7 +16,7 @@ use crate::peer::handshake::Handshake;
 use crate::peer::peer::{CycleMessage, Peer};
 use crate::tcp::message::Message;
 use crate::tcp::bittorrent_code::BitTorrentCodec;
-use crate::torrent::torrent_manager::{CompletedTask, DownloadBlock};
+use crate::torrent::torrent_downloader::{CompletedTask, DownloadBlock};
 
 pub struct PeerActor {
     peer: Peer,
