@@ -1,0 +1,63 @@
+{
+  "$schema": "node_modules/nx/schemas/project-schema.json",
+  "name": "terror",
+  "projectType": "application",
+  "sourceRoot": "src",
+  "prefix": "app",
+  "targets": {
+    "build": {
+      "executor": "@angular-devkit/build-angular:application",
+      "options": {
+        "outputPath": "dist/terror",
+        "index": "src/index.html",
+        "styles": ["src/styles.css"],
+        "browser": "src/main.ts",
+        "polyfills": [
+          "zone.js"
+        ],
+        "tsConfig": "tsconfig.app.json",
+        "assets": [
+          "src/assets"
+        ]
+      },
+      "configurations": {
+        "production": {
+          "budgets": [
+            {
+              "type": "initial",
+              "maximumWarning": "500kb",
+              "maximumError": "1mb"
+            },
+            {
+              "type": "anyComponentStyle",
+              "maximumWarning": "2kb",
+              "maximumError": "4kb"
+            }
+          ],
+          "outputHashing": "all"
+        },
+        "development": {
+          "optimization": false,
+          "extractLicenses": false,
+          "sourceMap": true
+        }
+      },
+      "defaultConfiguration": "production"
+    },
+    "serve": {
+      "executor": "@angular-devkit/build-angular:dev-server",
+      "options": {
+        "port": 1420
+      },
+      "configurations": {
+        "production": {
+          "buildTarget": "terror:build:production"
+        },
+        "development": {
+          "buildTarget": "terror:build:development"
+        }
+      },
+      "defaultConfiguration": "development"
+    }
+  }
+}

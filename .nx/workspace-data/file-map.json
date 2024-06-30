@@ -1,0 +1,286 @@
+{
+  "version": "6.0",
+  "nxVersion": "19.3.2",
+  "deps": {
+    "nx": "19.3.2"
+  },
+  "pathMappings": {},
+  "nxJsonPlugins": [],
+  "fileMap": {
+    "projectFileMap": {},
+    "nonProjectFiles": [
+      {
+        "file": ".gitattributes",
+        "hash": "5986353222832212050"
+      },
+      {
+        "file": ".gitignore",
+        "hash": "115930513521784836"
+      },
+      {
+        "file": ".idea/.gitignore",
+        "hash": "10286036308014790964"
+      },
+      {
+        "file": ".idea/codecrafters-bittorrent-rust.iml",
+        "hash": "2606381837402890926"
+      },
+      {
+        "file": ".idea/encodings.xml",
+        "hash": "3314071911936110814"
+      },
+      {
+        "file": ".idea/git_toolbox_prj.xml",
+        "hash": "15025719909834120292"
+      },
+      {
+        "file": ".idea/modules.xml",
+        "hash": "1940912292317846835"
+      },
+      {
+        "file": ".idea/vcs.xml",
+        "hash": "14600148892634157659"
+      },
+      {
+        "file": ".nx/nxw.js",
+        "hash": "11254603345854076312"
+      },
+      {
+        "file": "Cargo.lock",
+        "hash": "8808052992140617552"
+      },
+      {
+        "file": "Cargo.toml",
+        "hash": "10772609643377618773"
+      },
+      {
+        "file": "README.md",
+        "hash": "9204485914403179064"
+      },
+      {
+        "file": "codecrafters.yml",
+        "hash": "4839962993701273294"
+      },
+      {
+        "file": "output.torrent",
+        "hash": "15045234774798885769"
+      },
+      {
+        "file": "read_binary.py",
+        "hash": "14011635064171920771"
+      },
+      {
+        "file": "report.xml",
+        "hash": "17452965076712198275"
+      },
+      {
+        "file": "response.bin",
+        "hash": "135239766034584367"
+      },
+      {
+        "file": "response.txt",
+        "hash": "11619346243719730790"
+      },
+      {
+        "file": "sample.torrent",
+        "hash": "10585521348280605881"
+      },
+      {
+        "file": "save_decmal_file.py",
+        "hash": "364073338501209370"
+      },
+      {
+        "file": "src/crates/terror/.cargo/config.toml",
+        "hash": "712488293839943682"
+      },
+      {
+        "file": "src/crates/terror/Cargo.lock",
+        "hash": "2531331534042969095"
+      },
+      {
+        "file": "src/crates/terror/Cargo.toml",
+        "hash": "15835448506295192377"
+      },
+      {
+        "file": "src/crates/terror/decoder.rs",
+        "hash": "3988081679814389999"
+      },
+      {
+        "file": "src/crates/terror/digg_friends.zip",
+        "hash": "1445600934236657147"
+      },
+      {
+        "file": "src/crates/terror/digg_votes.zip",
+        "hash": "1445600934236657147"
+      },
+      {
+        "file": "src/crates/terror/profile.json",
+        "hash": "12373653775619129042"
+      },
+      {
+        "file": "src/crates/terror/src/lib.rs",
+        "hash": "18208064748045211134"
+      },
+      {
+        "file": "src/crates/terror/src/magnet/mod.rs",
+        "hash": "3244421341483603138"
+      },
+      {
+        "file": "src/crates/terror/src/main.rs",
+        "hash": "16389218755524988746"
+      },
+      {
+        "file": "src/crates/terror/src/metrics/mod.rs",
+        "hash": "3244421341483603138"
+      },
+      {
+        "file": "src/crates/terror/src/peer/handshake.rs",
+        "hash": "2006443480328768502"
+      },
+      {
+        "file": "src/crates/terror/src/peer/mod.rs",
+        "hash": "3408520333577148498"
+      },
+      {
+        "file": "src/crates/terror/src/peer/peer.rs",
+        "hash": "11666115048536399069"
+      },
+      {
+        "file": "src/crates/terror/src/peer/peer_actor.rs",
+        "hash": "17860889115798588718"
+      },
+      {
+        "file": "src/crates/terror/src/peer/peer_actor_pool.rs",
+        "hash": "18375435371039418808"
+      },
+      {
+        "file": "src/crates/terror/src/piece/mod.rs",
+        "hash": "3625777901759469799"
+      },
+      {
+        "file": "src/crates/terror/src/piece/piece.rs",
+        "hash": "17512903778114522617"
+      },
+      {
+        "file": "src/crates/terror/src/piece/piece_pool.rs",
+        "hash": "3782721995951696821"
+      },
+      {
+        "file": "src/crates/terror/src/tcp/bittorrent_code.rs",
+        "hash": "14946095639891321463"
+      },
+      {
+        "file": "src/crates/terror/src/tcp/message.rs",
+        "hash": "7762131602842481655"
+      },
+      {
+        "file": "src/crates/terror/src/tcp/mod.rs",
+        "hash": "9705200885483930420"
+      },
+      {
+        "file": "src/crates/terror/src/torrent/mod.rs",
+        "hash": "7017227263898397391"
+      },
+      {
+        "file": "src/crates/terror/src/torrent/torrent_info.rs",
+        "hash": "1561866704341957248"
+      },
+      {
+        "file": "src/crates/terror/src/torrent/torrent_manager.rs",
+        "hash": "15332685861650370357"
+      },
+      {
+        "file": "src/crates/terror/src/udp/mod.rs",
+        "hash": "3244421341483603138"
+      },
+      {
+        "file": "src/crates/terror/src/utils/metrics.rs",
+        "hash": "10942832780752809411"
+      },
+      {
+        "file": "src/crates/terror/src/utils/mod.rs",
+        "hash": "15361612597960726522"
+      },
+      {
+        "file": "src/crates/terror/src/utils/utils.rs",
+        "hash": "5328590456128131086"
+      },
+      {
+        "file": "src/crates/terror/test/BuzzFeed News transcription of Airbnb NYC data.txt",
+        "hash": "10613613769711535934"
+      },
+      {
+        "file": "src/crates/terror/test/BuzzFeedNewstranscriptionofAirbnbNYCdata.xlsx-968a3ff5e4182cdecd239980ecfd257a37451003.torrent",
+        "hash": "11951306874501897297"
+      },
+      {
+        "file": "src/crates/terror/test/FEOW-TNC.zip-fb993412755d0bdc8aabd9c6959215293958b220.torrent",
+        "hash": "1448363798758814358"
+      },
+      {
+        "file": "src/crates/terror/test/alice.torrent",
+        "hash": "17942978294915478806"
+      },
+      {
+        "file": "src/crates/terror/test/bbb_sunflower_1080p_30fps_stereo_abl.mp4.torrent",
+        "hash": "17558526502171705129"
+      },
+      {
+        "file": "src/crates/terror/test/bunny.torrent",
+        "hash": "11395410158256927094"
+      },
+      {
+        "file": "src/crates/terror/test/downloads-d98540da6d34fb6a0150fd88b41580a377cb454d.torrent",
+        "hash": "12419959012857134982"
+      },
+      {
+        "file": "src/crates/terror/test/mnist-ce990b28668abf16480b8b906640a6cd7e3b8b21.torrent",
+        "hash": "2382328324247220739"
+      },
+      {
+        "file": "src/crates/terror/test/original-0f9ac75f2d9e2ce2ef7b800aa23882915f4e31fa.torrent",
+        "hash": "5956376852303882473"
+      },
+      {
+        "file": "src/crates/terror/test/output",
+        "hash": "3244421341483603138"
+      },
+      {
+        "file": "src/crates/terror/test/sample.torrent",
+        "hash": "10585521348280605881"
+      },
+      {
+        "file": "src/crates/terror/test/sample_correct.txt",
+        "hash": "18094817052218049675"
+      },
+      {
+        "file": "src/crates/terror/test/smsspamcollection-25932ba42d983dd7b4474d8f59ab56cdc25d9107.torrent",
+        "hash": "13201085588307905857"
+      },
+      {
+        "file": "src/crates/terror/test/tracker_response.txt",
+        "hash": "893052089384509601"
+      },
+      {
+        "file": "src/lib.rs",
+        "hash": "3244421341483603138"
+      },
+      {
+        "file": "src/main.rs",
+        "hash": "15706527006136422359"
+      },
+      {
+        "file": "src/mod.rs",
+        "hash": "3244421341483603138"
+      },
+      {
+        "file": "test-piece",
+        "hash": "4116247684893615911"
+      },
+      {
+        "file": "your_bittorrent.sh",
+        "hash": "1798346863130274704"
+      }
+    ]
+  }
+}
