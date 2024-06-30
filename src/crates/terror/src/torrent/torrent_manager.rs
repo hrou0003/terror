@@ -5,7 +5,7 @@ use tokio::join;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 use crate::peer::peer_actor_pool::PeerActorPool;
-use crate::piece::piece::PiecePool;
+use crate::piece::piece_pool::PiecePool;
 use crate::torrent::torrent_info::Torrent;
 
 

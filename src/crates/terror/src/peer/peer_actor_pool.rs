@@ -57,11 +57,11 @@ impl PeerActorPool {
         }).collect();
 
         let (cycle_tx, cycle_rx) = tokio::sync::mpsc::channel(10);
-        
+
         let actors = peers.iter().map(|peer| {
             return PeerActorHandle::new(peer.ip_addr, peer.port, info_hash, task_queue.clone(), completed_task_tx.clone(), cycle_tx.clone());
         }).collect();
-        
+
         Ok(Self {
             actors: actors,
             task_queue,

@@ -1,2 +1,2 @@
 pub mod piece;
-mod piece_pool;
+pub mod piece_pool;

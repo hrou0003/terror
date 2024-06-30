@@ -225,13 +225,7 @@ impl PiecePool {
     }
 
     fn get_next_piece(&self) -> Option<&Piece> {
-        for piece in self.pieces.values() {
-            if piece.piece_state == PieceState::Missing {
-                return Some(piece);
-            }
-        }
-
-        None
+        self.pieces.values().find(|&piece| piece.piece_state == PieceState::Missing)
     }
 
     pub fn get_piece(&self, index: usize) -> Option<&Piece> {
