@@ -1,16 +1,16 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { TorrentDashboardComponent } from './torrent-dashboard.component';
+import TorrentDashboardPage from './torrent-dashboard.page';
 
 describe('TorrentDashboardComponent', () => {
-  let component: TorrentDashboardComponent;
-  let fixture: ComponentFixture<TorrentDashboardComponent>;
+  let component: TorrentDashboardPage;
+  let fixture: ComponentFixture<TorrentDashboardPage>;
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      imports: [TorrentDashboardComponent],
+      imports: [TorrentDashboardPage],
     }).compileComponents();
 
-    fixture = TestBed.createComponent(TorrentDashboardComponent);
+    fixture = TestBed.createComponent(TorrentDashboardPage);
     component = fixture.componentInstance;
     fixture.detectChanges();
   });

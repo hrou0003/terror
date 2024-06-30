@@ -1,9 +1,9 @@
 import { Routes } from "@angular/router";
-import { TorrentDashboardComponent } from "./pages/torrent-dashboard/torrent-dashboard.component";
+import TorrentDashboardPage from "./pages/torrent-dashboard/torrent-dashboard.page";
 
 export const routes: Routes = [
     {
         path: '',
-        component: TorrentDashboardComponent
+        component: TorrentDashboardPage
     }
 ];
