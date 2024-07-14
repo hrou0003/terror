@@ -18,12 +18,11 @@ pub struct TrackerResponse {
     pub peers: Vec<Peer>,
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Peer {
     pub(crate) ip: String,
     #[serde(rename = "peer id", with = "serde_bytes")]
-    peer_id: ByteBuf,
+    pub(crate) peer_id: ByteBuf,
     pub port: i64,
 }
 

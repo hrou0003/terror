@@ -1,20 +1,22 @@
-use std::collections::HashMap;
-use std::net::IpAddr;
-use std::sync::Arc;
-use bytes::Bytes;
-use tokio::join;
-use tokio::sync::{Mutex, oneshot, RwLock};
-use tracing::{debug, info, Level, span};
-use anyhow::Result;
-use kanal::{AsyncReceiver, AsyncSender};
-use tokio::sync::mpsc::{Sender, UnboundedSender};
-use tracing::field::debug;
 use crate::peer::peer::CycleMessage;
 use crate::peer::peer_actor::{PeerActor, PeerMessage};
 use crate::peer::peer_actor_pool::PeerActorPool;
 use crate::piece::piece::Priority;
 use crate::piece::piece_pool::PiecePool;
 use crate::torrent::torrent_info::Torrent;
+use anyhow::Result;
+use bytes::Bytes;
+use kanal::{AsyncReceiver, AsyncSender};
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::join;
+use tokio::sync::mpsc::{Sender, UnboundedSender};
+use tokio::sync::{oneshot, Mutex, RwLock};
+use tracing::field::debug;
+use tracing::{debug, info, span, Level};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownloaderState {
@@ -35,11 +37,14 @@ pub(crate) struct DownloadBlock {
 #[derive(Debug)]
 pub enum CompletedTask {
     DownloadedBlock {
+        peer_id: String,
+        download_time: Instant,
         piece_index: usize,
         block_index: usize,
         bytes: Bytes,
     },
     FailedBlock {
+        peer_id: String,
         piece_index: usize,
         block_index: usize,
     },
@@ -55,15 +60,21 @@ pub struct TorrentDownloader {
 }
 
 impl TorrentDownloader {
-    pub async fn new(torrent_info: Torrent, receiver: AsyncReceiver<TorrentDownloaderMessage>) -> Self {
+    pub async fn new(
+        torrent_info: Torrent,
+        receiver: AsyncReceiver<TorrentDownloaderMessage>,
+    ) -> Self {
         let pieces = (0..torrent_info.info.pieces.len())
             .map(|index| (index, "available".to_string()))
             .collect();
 
-        let (task_queue_sender, task_queue) = kanal::bounded_async::<DownloadBlock>(32);
+        let (task_queue_sender, task_queue) = kanal::bounded_async::<DownloadBlock>(3000);
         let (completed_task_tx, completed_task_rx) = tokio::sync::mpsc::unbounded_channel();
-        let peer_actor_pool = PeerActorPool::new(&torrent_info, task_queue, completed_task_tx).await.unwrap();
-        let piece_pool = PiecePool::new(&torrent_info, task_queue_sender, completed_task_rx).unwrap();
+        let peer_actor_pool = PeerActorPool::new(&torrent_info, task_queue, completed_task_tx)
+            .await
+            .unwrap();
+        let piece_pool =
+            PiecePool::new(&torrent_info, task_queue_sender, completed_task_rx).unwrap();
 
         Self {
             torrent_info,
@@ -74,7 +85,7 @@ impl TorrentDownloader {
             state: Arc::new(RwLock::new(DownloaderState::Paused)),
         }
     }
-    
+
     async fn handle_message(&mut self, msg: TorrentDownloaderMessage) -> anyhow::Result<()> {
         let span = span!(Level::DEBUG, "Torrent Downloader");
         let _guard = span.enter();
@@ -83,15 +94,15 @@ impl TorrentDownloader {
                 debug!("Starting torrent download");
                 *self.state.write().await = DownloaderState::Downloading;
                 self.run().await?;
-            },
+            }
             TorrentDownloaderMessage::Pause => {
                 debug!("Pausing torrent download");
                 self.pause().await?;
-            },
+            }
             TorrentDownloaderMessage::Resume => {
                 debug!("Resuming torrent download");
                 self.resume().await?;
-            }, 
+            }
         }
         Ok(())
     }
@@ -113,17 +124,17 @@ impl TorrentDownloader {
             pool.start().await;
         });
 
-        let state_handle = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                let current_state = *state.read().await;
-                if current_state == DownloaderState::Completed || current_state == DownloaderState::Error {
-                    break;
-                }
-            }
-        });
+        // let state_handle = tokio::spawn(async move {
+        //     loop {
+        //         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        //         let current_state = *state.read().await;
+        //         if current_state == DownloaderState::Completed || current_state == DownloaderState::Error {
+        //             break;
+        //         }
+        //     }
+        // });
 
-        let _ = join!(peer_actor_pool_handle, piece_pool_handle, state_handle);
+        let _ = join!(peer_actor_pool_handle, piece_pool_handle);
 
         debug!("Torrent download finished");
         Ok(())

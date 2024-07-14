@@ -1,19 +1,19 @@
-use std::fmt::Debug;
 use bytes::Bytes;
+use std::fmt::Debug;
 
 #[derive(PartialEq, Debug)]
 pub enum Message {
-    Bitfield(Bytes), 
+    Bitfield(Bytes),
     Interested,
     Unchoke,
     Request {
-        index: u32,
-        begin: u32,
-        length: u32,
+        index: usize,
+        begin: usize,
+        length: usize,
     },
     Piece {
-        index: u32,
-        begin: u32,
-        block: Bytes
-    }
+        index: usize,
+        begin: usize,
+        block: Bytes,
+    },
 }

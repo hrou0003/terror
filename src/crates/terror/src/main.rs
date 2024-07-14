@@ -1,27 +1,32 @@
 use std::thread::sleep;
 use std::time::Duration;
-use tokio::time::Instant;
-use tracing::{info, Level};
-use tracing::level_filters::LevelFilter;
-use terror::torrent::torrent_info::Torrent;
 use terror::torrent::torrent_downloader::{TorrentDownloader, TorrentDownloaderHandle};
+use terror::torrent::torrent_info::Torrent;
 use terror::torrent::torrents_manager::TorrentManager;
+use tokio::time::Instant;
+use tracing::level_filters::LevelFilter;
+use tracing::{info, Level};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 
 #[tokio::main(flavor = "multi_thread")]
 #[tracing::instrument(ret)]
-async fn main() -> anyhow::Result<()>{
-    // console_subscriber::init();
-    
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_max_level(LevelFilter::DEBUG)
+async fn main() -> anyhow::Result<()> {
+    let console_layer = console_subscriber::spawn();
+    tracing_subscriber::registry()
+        .with(console_layer)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_filter(tracing_subscriber::filter::LevelFilter::DEBUG),
+        )
         .init();
-    
+
     let mut torrent_manager = TorrentManager::new();
 
     // Add multiple torrents
     let torrent_files = vec![
-        "test/FEOW-TNC.zip-fb993412755d0bdc8aabd9c6959215293958b220.torrent",
+        // "test/FEOW-TNC.zip-fb993412755d0bdc8aabd9c6959215293958b220.torrent",
         "test/downloads-d98540da6d34fb6a0150fd88b41580a377cb454d.torrent",
     ];
 
@@ -40,16 +45,16 @@ async fn main() -> anyhow::Result<()>{
         torrent_manager.start_torrent(id).await?;
         println!("Started torrent with ID: {}", id);
     }
-    
+
     sleep(Duration::new(10000, 0));
 
     // // Simulate some time passing
     // tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-    // 
+    //
     // // Pause the first torrent
     // torrent_manager.pause_torrent(&torrent_ids[0]).await?;
     // println!("Paused torrent with ID: {}", torrent_ids[0]);
-    // 
+    //
     // // Resume the first torrent after a short delay
     // tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     // torrent_manager.resume_torrent(&torrent_ids[0]).await?;
@@ -65,11 +70,11 @@ async fn main() -> anyhow::Result<()>{
     //             println!("Torrent {} progress: {:.2}%", id, progress);
     //         }
     //     }
-    // 
+    //
     //     if all_completed {
     //         break;
     //     }
-    // 
+    //
     //     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     // }
 
@@ -80,7 +85,6 @@ async fn main() -> anyhow::Result<()>{
     }
 
     println!("All torrents completed and removed.");
-
 
     Ok(())
 }

@@ -1,9 +1,11 @@
+use crate::torrent::torrent_downloader::{
+    TorrentDownloader, TorrentDownloaderHandle, TorrentDownloaderMessage,
+};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
-use anyhow::Result;
-use crate::torrent::torrent_downloader::{TorrentDownloader, TorrentDownloaderHandle, TorrentDownloaderMessage};
 
 // Assuming these types are defined elsewhere in your project
 use crate::torrent::torrent_info::Torrent;
@@ -45,7 +47,11 @@ impl TorrentManager {
     pub async fn start_torrent(&self, id: &Uuid) -> Result<()> {
         if let Some(handle) = self.torrents.get(id) {
             let mut handle = handle.lock().await;
-            handle.torrent.sender.send(TorrentDownloaderMessage::Start).await;
+            handle
+                .torrent
+                .sender
+                .send(TorrentDownloaderMessage::Start)
+                .await;
             if handle.state == TorrentState::Paused {
                 handle.state = TorrentState::Downloading;
             }
@@ -59,7 +65,11 @@ impl TorrentManager {
             if handle.state == TorrentState::Downloading {
                 handle.state = TorrentState::Paused;
                 // Implement pausing logic for PiecePool
-                handle.torrent.sender.send(TorrentDownloaderMessage::Pause).await;
+                handle
+                    .torrent
+                    .sender
+                    .send(TorrentDownloaderMessage::Pause)
+                    .await;
             }
         }
         Ok(())

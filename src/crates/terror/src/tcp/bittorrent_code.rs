@@ -1,7 +1,7 @@
-use tokio_util::codec::{Decoder, Encoder};
-use bytes::{BytesMut, Buf, BufMut};
-use std::io;
 use crate::tcp::message::Message;
+use bytes::{Buf, BufMut, BytesMut};
+use std::io;
+use tokio_util::codec::{Decoder, Encoder};
 
 pub struct BitTorrentCodec;
 
@@ -41,26 +41,37 @@ impl Decoder for BitTorrentCodec {
             5 => {
                 let bitfield = src.split_to(length - 1).freeze();
                 Ok(Some(Message::Bitfield(bitfield)))
-            },
+            }
             6 => {
                 if src.len() < 12 {
                     return Ok(None);
                 }
-                let index = src.get_u32();
-                let begin = src.get_u32();
-                let length = src.get_u32();
-                Ok(Some(Message::Request { index, begin, length }))
-            },
+                let index = src.get_u32() as usize;
+                let begin = src.get_u32() as usize;
+                let length = src.get_u32() as usize;
+                Ok(Some(Message::Request {
+                    index,
+                    begin,
+                    length,
+                }))
+            }
             7 => {
                 if src.len() < 8 {
                     return Ok(None);
                 }
-                let index = src.get_u32();
-                let begin = src.get_u32();
+                let index = src.get_u32() as usize;
+                let begin = src.get_u32() as usize;
                 let block = src.split_to(length - 9).freeze();
-                Ok(Some(Message::Piece { index, begin, block }))
-            },
-            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unknown message type")),
+                Ok(Some(Message::Piece {
+                    index,
+                    begin,
+                    block,
+                }))
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Unknown message type",
+            )),
         }
     }
 }
@@ -73,30 +84,38 @@ impl Encoder<Message> for BitTorrentCodec {
             Message::Unchoke => {
                 dst.put_u32(1);
                 dst.put_u8(1);
-            },
+            }
             Message::Interested => {
                 dst.put_u32(1);
                 dst.put_u8(2);
-            },
+            }
             Message::Bitfield(bitfield) => {
                 dst.put_u32((1 + bitfield.len()) as u32);
                 dst.put_u8(5);
                 dst.extend_from_slice(&bitfield);
-            },
-            Message::Request { index, begin, length } => {
+            }
+            Message::Request {
+                index,
+                begin,
+                length,
+            } => {
                 dst.put_u32(13);
                 dst.put_u8(6);
-                dst.put_u32(index);
-                dst.put_u32(begin);
-                dst.put_u32(length);
-            },
-            Message::Piece { index, begin, block } => {
+                dst.put_u32(index as u32);
+                dst.put_u32(begin as u32);
+                dst.put_u32(length as u32);
+            }
+            Message::Piece {
+                index,
+                begin,
+                block,
+            } => {
                 dst.put_u32((9 + block.len()) as u32);
                 dst.put_u8(7);
-                dst.put_u32(index);
-                dst.put_u32(begin);
+                dst.put_u32(index as u32);
+                dst.put_u32(begin as u32);
                 dst.extend_from_slice(&block);
-            },
+            }
         }
         Ok(())
     }

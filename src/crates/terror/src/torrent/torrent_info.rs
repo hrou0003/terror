@@ -1,10 +1,10 @@
 use std::fs;
 
+use crate::piece::piece::Priority;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use sha1::{Digest, Sha1};
 use tracing::debug;
-use crate::piece::piece::Priority;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Torrent {
@@ -19,7 +19,7 @@ pub struct Torrent {
     creation_date: Option<i64>,
     pub info: Info,
     #[serde(rename = "url-list")]
-    pub url_list: Option<Vec<String>>
+    pub url_list: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,9 +59,8 @@ pub(crate) struct FileInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) end_piece: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) priority: Option<Priority>
+    pub(crate) priority: Option<Priority>,
 }
-
 
 impl Torrent {
     pub const MAX_CONCURRENT: usize = 4;
@@ -69,7 +68,7 @@ impl Torrent {
 
     pub fn new(file_path: String) -> Torrent {
         let file = fs::read(file_path).expect("bad file");
-        let torrent : Torrent = serde_bencode::de::from_bytes(&file).unwrap();
+        let torrent: Torrent = serde_bencode::de::from_bytes(&file).unwrap();
         return torrent;
     }
 
@@ -82,31 +81,30 @@ impl Torrent {
         hasher.update(info_raw);
         return hasher.finalize().into();
     }
-    
+
     pub(crate) fn get_number_of_pieces(&self) -> usize {
         let number_of_pieces = self.info.length() as f64 / self.info.piece_length.unwrap() as f64;
         return number_of_pieces.ceil() as usize;
     }
-    
-    fn get_number_of_blocks(&self) -> usize {
-        return  self.info.piece_length.unwrap() / (1<<14);
-    }
 
+    fn get_number_of_blocks(&self) -> usize {
+        return self.info.piece_length.unwrap() / (1 << 14);
+    }
 }
 
 impl Info {
     pub fn length(&self) -> usize {
         match self.length {
             Some(length) => length,
-            None => {
-                self.files.as_ref().unwrap().iter().fold(0, |acc, file| {
-                    acc + file.length
-                })
-            }
+            None => self
+                .files
+                .as_ref()
+                .unwrap()
+                .iter()
+                .fold(0, |acc, file| acc + file.length),
         }
     }
 }
-
 
 mod tests {
     use super::*;
@@ -115,19 +113,24 @@ mod tests {
     fn test_calculate_info_hash() {
         let mut torrent = Torrent::new("sample.torrent_info".to_string());
         let info_hash = torrent.calculate_info_hash();
-        assert_eq!(info_hash, [0x8e, 0x9e, 0x9f, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e]);
+        assert_eq!(
+            info_hash,
+            [
+                0x8e, 0x9e, 0x9f, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e,
+                0x9f, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e
+            ]
+        );
     }
-    
+
     #[test]
     fn test_get_number_of_pieces() {
         let torrent = Torrent::new("sample.torrent_info".to_string());
         assert_eq!(torrent.get_number_of_pieces(), 3);
     }
-    
+
     #[test]
     fn test_get_number_of_blocks() {
         let torrent = Torrent::new("sample.torrent_info".to_string());
         assert_eq!(torrent.get_number_of_blocks(), 2);
     }
-    
 }

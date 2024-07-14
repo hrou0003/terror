@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, MutexGuard};
@@ -11,7 +11,7 @@ pub(crate) struct Handshake {
     pub bittorrent: [u8; 19],
     pub reserved: [u8; 8],
     pub info_hash: [u8; 20],
-    pub peer_id: [u8; 20]
+    pub peer_id: [u8; 20],
 }
 
 impl Handshake {
@@ -21,7 +21,7 @@ impl Handshake {
             bittorrent: *b"BitTorrent protocol",
             reserved: [0; 8],
             info_hash,
-            peer_id
+            peer_id,
         }
     }
 
@@ -53,8 +53,12 @@ impl Handshake {
 
     pub(crate) async fn from_stream(stream: &mut TcpStream) -> tokio::io::Result<Self> {
         let mut bytes = vec![0; 68]; // length of handshake message
-        
-        if stream.ready(tokio::io::Interest::READABLE).await?.is_readable() {
+
+        if stream
+            .ready(tokio::io::Interest::READABLE)
+            .await?
+            .is_readable()
+        {
             // The stream is readable, proceed with reading
             debug!("Reading bytes");
             match stream.read_exact(&mut bytes).await {
@@ -103,12 +107,14 @@ impl Handshake {
         })
     }
 
-    pub async fn handshake(info_hash: [u8; 20], stream: &mut TcpStream) -> anyhow::Result<Handshake> {
-
+    pub async fn handshake(
+        info_hash: [u8; 20],
+        stream: &mut TcpStream,
+    ) -> anyhow::Result<Handshake> {
         let peer_id: [u8; 20] = *b"00112233445566778899";
         let mut handshake = Handshake::new(info_hash, peer_id);
         let handshake_bytes = handshake.to_bytes();
-        
+
         debug!("Send handshake request {}", hex::encode(handshake_bytes));
         stream.write_all(&handshake_bytes).await?;
 
@@ -120,7 +126,10 @@ impl Handshake {
             }
         };
 
-        debug!("Handshake completed on: {}", hex::encode(received_handshake.peer_id));
+        debug!(
+            "Handshake completed on: {}",
+            hex::encode(received_handshake.peer_id)
+        );
 
         Ok(received_handshake)
     }

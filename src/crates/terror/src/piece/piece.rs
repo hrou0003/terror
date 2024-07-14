@@ -1,20 +1,20 @@
-use std::cmp::PartialEq;
-use tokio::sync::{mpsc};
-use std::collections::{HashMap, HashSet};
-use std::io::SeekFrom;
-use std::time::Duration;
+use crate::torrent::torrent_downloader::{CompletedTask, DownloadBlock};
+use crate::torrent::torrent_info::{FileInfo, Torrent};
 use actix::prelude::*;
 use anyhow::anyhow;
 use bytes::Bytes;
 use kanal::AsyncSender;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use std::cmp::PartialEq;
+use std::collections::{HashMap, HashSet};
+use std::io::SeekFrom;
+use std::time::Duration;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, info};
-use crate::torrent::torrent_info::{FileInfo, Torrent};
-use crate::torrent::torrent_downloader::{CompletedTask, DownloadBlock};
 
 pub(crate) struct Piece {
     pub(crate) index: usize,
@@ -52,10 +52,7 @@ impl Default for Priority {
 
 #[derive(PartialEq, Eq)]
 pub(crate) enum BlockState {
-    Downloaded {
-        data: Bytes,
-        duration: Duration,
-    },
+    Downloaded { data: Bytes, duration: Duration },
     Downloading,
     Missing,
     Saved,
@@ -94,7 +91,7 @@ impl Piece {
                 let is_correct_hash = Some(downloaded_bytes_hash == *self.piece_hash);
                 return is_correct_hash;
             }
-            _ => None
+            _ => None,
         }
     }
 
@@ -104,7 +101,10 @@ impl Piece {
             // Get the bytes for the current file
             let (bytes, file_write_start_index): (Vec<u8>, usize) = match &self.piece_state {
                 PieceState::Downloaded { piece_bytes } => {
-                    let (start_piece, end_piece) = (file_info.start_piece.unwrap_or(0), file_info.end_piece.unwrap_or(0));
+                    let (start_piece, end_piece) = (
+                        file_info.start_piece.unwrap_or(0),
+                        file_info.end_piece.unwrap_or(0),
+                    );
                     let piece_offset = (self.index - start_piece) * Self::PIECE_SIZE as usize;
                     let file_write_start_index = piece_offset + file_info.offset.unwrap_or(0);
                     let bytes = if start_piece == self.index {
@@ -112,7 +112,7 @@ impl Piece {
                         let start_index = file_info.offset.unwrap_or(0);
                         piece_bytes[start_index..].to_vec()
                     } else if end_piece == self.index {
-                        // Check where to end 
+                        // Check where to end
                         let end_index = Self::PIECE_SIZE as usize - file_info.offset.unwrap_or(0);
                         piece_bytes[..].to_vec()
                     } else {
@@ -131,7 +131,8 @@ impl Piece {
                 .await?;
 
             // We need to determine the position in the file to write the bytes to
-            file.seek(SeekFrom::Start(file_write_start_index as u64)).await?;
+            file.seek(SeekFrom::Start(file_write_start_index as u64))
+                .await?;
 
             file.write_all(&bytes).await?;
         }

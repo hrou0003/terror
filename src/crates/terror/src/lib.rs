@@ -8,13 +8,10 @@ pub mod torrent;
 
 pub(crate) mod peer;
 
+mod metrics;
 mod piece;
-mod utils;
 pub(crate) mod tcp;
-
-
-pub use {
-};
+mod utils;
 
 #[cfg(test)]
 mod tests {
