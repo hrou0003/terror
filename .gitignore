@@ -11,3 +11,5 @@ target/
 
 .nx/installation
 .nx/cache
+
+.idea/
