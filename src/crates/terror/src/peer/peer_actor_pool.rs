@@ -71,7 +71,7 @@ impl PeerActorPool {
             })
             .collect();
 
-        let (completed_tx, completed_rx) = bounded_async::<CompletedTask>(100);
+        let (completed_tx, completed_rx) = bounded_async::<CompletedTask>(3000);
 
         let actors = peers
             .iter()

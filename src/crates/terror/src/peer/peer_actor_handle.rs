@@ -38,7 +38,7 @@ impl PeerActorHandle {
         info_hash: [u8; 20],
         completed_task_tx: AsyncSender<CompletedTask>,
     ) -> Self {
-        let (sender, receiver) = kanal::bounded_async(8);
+        let (sender, receiver) = kanal::bounded_async(3000);
         let actor = PeerActor::new(
             peer_id.clone(),
             ip_addr,
@@ -61,14 +61,9 @@ impl PeerActorHandle {
 async fn run_peer_actor(mut actor: PeerActor) {
     loop {
         let msg = actor.receiver.recv().await;
-        match msg {
-            Ok(msg) => {
-                actor.handle_message(msg).await;
-                debug!("Passing message form peer actor handle");
-            }
-            Err(_) => {
-                error!("couldn't pass message from peer actor handle");
-            }
+        if let Ok(msg) = msg {
+            actor.handle_message(msg).await.expect("TODO: panic message");
+            debug!("Passing message form peer actor handle");
         }
     }
 }

@@ -124,16 +124,6 @@ impl TorrentDownloader {
             pool.start().await;
         });
 
-        // let state_handle = tokio::spawn(async move {
-        //     loop {
-        //         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        //         let current_state = *state.read().await;
-        //         if current_state == DownloaderState::Completed || current_state == DownloaderState::Error {
-        //             break;
-        //         }
-        //     }
-        // });
-
         let _ = join!(peer_actor_pool_handle, piece_pool_handle);
 
         debug!("Torrent download finished");
