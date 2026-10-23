@@ -1,90 +1,52 @@
-use std::thread::sleep;
-use std::time::Duration;
-use terror::torrent::torrent_downloader::{TorrentDownloader, TorrentDownloaderHandle};
+use anyhow::{bail, Result};
+use clap::Parser;
+use terror::torrent::torrent_downloader::{DownloaderState, TorrentDownloaderHandle};
 use terror::torrent::torrent_info::Torrent;
 use terror::torrent::torrents_manager::TorrentManager;
-use tokio::time::Instant;
-use tracing::level_filters::LevelFilter;
-use tracing::{info, Level};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
+use tokio::time::{interval, Duration};
 
-#[tokio::main(flavor = "multi_thread")]
-#[tracing::instrument(ret)]
-async fn main() -> anyhow::Result<()> {
-    let console_layer = console_subscriber::spawn();
-    tracing_subscriber::registry()
-        .with(console_layer)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_filter(tracing_subscriber::filter::LevelFilter::DEBUG),
-        )
-        .init();
+#[derive(Parser)]
+#[command(about = "Download a torrent using the actor-based engine")]
+struct Args {
+    /// Path to a .torrent file. Output is written to the current directory.
+    torrent: String,
+}
 
-    let mut torrent_manager = TorrentManager::new();
-
-    // Add multiple torrents
-    let torrent_files = vec![
-        // "test/FEOW-TNC.zip-fb993412755d0bdc8aabd9c6959215293958b220.torrent",
-        "test/downloads-d98540da6d34fb6a0150fd88b41580a377cb454d.torrent",
-    ];
-
-    let mut torrent_ids = Vec::new();
-
-    for torrent_file in torrent_files {
-        let torrent = Torrent::new(torrent_file.to_string());
-        let torrent_downloader = TorrentDownloaderHandle::new(torrent).await;
-        let id = torrent_manager.add_torrent(torrent_downloader).await?;
-        torrent_ids.push(id);
-        println!("Added torrent with ID: {}", id);
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args = Args::parse();
+    tracing_subscriber::fmt().with_target(false).init();
+    let mut manager = TorrentManager::new();
+    let downloader = TorrentDownloaderHandle::new(Torrent::new(args.torrent)).await?;
+    let id = manager.add_torrent(downloader).await?;
+    manager.start_torrent(&id).await?;
+    let mut ticker = interval(Duration::from_millis(250));
+    let mut failed = false;
+    loop {
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                result?;
+                println!("Stopping torrent...");
+                break;
+            }
+            _ = ticker.tick() => {
+                match manager.get_torrent_state(&id)? {
+                    DownloaderState::Completed => {
+                        println!("Download completed (100%).");
+                        break;
+                    }
+                    DownloaderState::Error => {
+                        failed = true;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
-
-    // Start all torrents
-    for id in &torrent_ids {
-        torrent_manager.start_torrent(id).await?;
-        println!("Started torrent with ID: {}", id);
+    manager.shutdown().await?;
+    if failed {
+        bail!("download failed; see the engine log above");
     }
-
-    sleep(Duration::new(10000, 0));
-
-    // // Simulate some time passing
-    // tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-    //
-    // // Pause the first torrent
-    // torrent_manager.pause_torrent(&torrent_ids[0]).await?;
-    // println!("Paused torrent with ID: {}", torrent_ids[0]);
-    //
-    // // Resume the first torrent after a short delay
-    // tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-    // torrent_manager.resume_torrent(&torrent_ids[0]).await?;
-    // println!("Resumed torrent with ID: {}", torrent_ids[0]);
-
-    // Monitor progress of all torrents
-    // loop {
-    //     let mut all_completed = false;
-    //     for id in &torrent_ids {
-    //         if let Some(handle) = torrent_manager.torrents.get(id) {
-    //             let handle = handle.lock().await;
-    //             let progress = handle.torrent.get_progress().await?;
-    //             println!("Torrent {} progress: {:.2}%", id, progress);
-    //         }
-    //     }
-    //
-    //     if all_completed {
-    //         break;
-    //     }
-    //
-    //     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-    // }
-
-    // Remove all torrents
-    for id in &torrent_ids {
-        torrent_manager.remove_torrent(id).await?;
-        println!("Removed torrent with ID: {}", id);
-    }
-
-    println!("All torrents completed and removed.");
-
     Ok(())
 }

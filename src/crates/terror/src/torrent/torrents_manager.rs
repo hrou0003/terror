@@ -1,112 +1,72 @@
-use crate::torrent::torrent_downloader::{
-    TorrentDownloader, TorrentDownloaderHandle, TorrentDownloaderMessage,
-};
-use anyhow::Result;
+use crate::torrent::torrent_downloader::{DownloaderState, TorrentDownloaderHandle};
+use anyhow::{anyhow, Result};
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
-// Assuming these types are defined elsewhere in your project
-use crate::torrent::torrent_info::Torrent;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TorrentState {
-    Downloading,
-    Paused,
-    Completed,
-    Error,
-}
-
-pub struct TorrentHandle {
-    pub torrent: TorrentDownloaderHandle,
-    state: TorrentState,
-}
-
+#[derive(Default)]
 pub struct TorrentManager {
-    pub torrents: HashMap<Uuid, Arc<Mutex<TorrentHandle>>>,
+    torrents: HashMap<Uuid, TorrentDownloaderHandle>,
 }
 
 impl TorrentManager {
     pub fn new() -> Self {
-        TorrentManager {
-            torrents: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub async fn add_torrent(&mut self, torrent: TorrentDownloaderHandle) -> Result<Uuid> {
-        let handle = TorrentHandle {
-            torrent,
-            state: TorrentState::Paused,
-        };
         let id = Uuid::new_v4();
-        self.torrents.insert(id, Arc::new(Mutex::new(handle)));
+        self.torrents.insert(id, torrent);
         Ok(id)
     }
 
+    fn torrent(&self, id: &Uuid) -> Result<&TorrentDownloaderHandle> {
+        self.torrents
+            .get(id)
+            .ok_or_else(|| anyhow!("unknown torrent {id}"))
+    }
+
     pub async fn start_torrent(&self, id: &Uuid) -> Result<()> {
-        if let Some(handle) = self.torrents.get(id) {
-            let mut handle = handle.lock().await;
-            handle
-                .torrent
-                .sender
-                .send(TorrentDownloaderMessage::Start)
-                .await;
-            if handle.state == TorrentState::Paused {
-                handle.state = TorrentState::Downloading;
-            }
-        }
-        Ok(())
+        self.torrent(id)?.start().await
     }
 
     pub async fn pause_torrent(&self, id: &Uuid) -> Result<()> {
-        if let Some(handle) = self.torrents.get(id) {
-            let mut handle = handle.lock().await;
-            if handle.state == TorrentState::Downloading {
-                handle.state = TorrentState::Paused;
-                // Implement pausing logic for PiecePool
-                handle
-                    .torrent
-                    .sender
-                    .send(TorrentDownloaderMessage::Pause)
-                    .await;
-            }
-        }
-        Ok(())
+        self.torrent(id)?.pause().await
     }
 
     pub async fn resume_torrent(&self, id: &Uuid) -> Result<()> {
-        if let Some(handle) = self.torrents.get(id) {
-            let mut handle = handle.lock().await;
-            if handle.state == TorrentState::Paused {
-                handle.state = TorrentState::Downloading;
-                // Implement resuming logic for PiecePool
-            }
-        }
-        Ok(())
+        self.torrent(id)?.resume().await
+    }
+
+    pub fn get_torrent_state(&self, id: &Uuid) -> Result<DownloaderState> {
+        Ok(self.torrent(id)?.get_state())
+    }
+
+    pub fn get_torrent_progress(&self, id: &Uuid) -> Result<f64> {
+        Ok(self.torrent(id)?.get_progress())
     }
 
     pub async fn remove_torrent(&mut self, id: &Uuid) -> Result<()> {
-        if let Some(handle) = self.torrents.remove(id) {
-            let mut handle = handle.lock().await;
-            // Implement cleanup logic
-            handle.state = TorrentState::Error;
-        }
-        Ok(())
+        // Keep ownership in the map while awaiting so cancelling removal cannot detach tasks.
+        let torrent = self
+            .torrents
+            .get_mut(id)
+            .ok_or_else(|| anyhow!("unknown torrent {id}"))?;
+        let result = torrent.shutdown().await;
+        self.torrents.remove(id);
+        result
     }
 
-    // pub async fn get_torrent_state(&self, id: &Uuid) -> Option<TorrentState> {
-    //     self.torrents.get(id).map(async move |handle| {
-    //         let handle = handle.lock().await;
-    //         handle.state
-    //     })
-    // }
-
-    // pub async fn get_torrent_progress(&self, id: &Uuid) -> Option<f64> {
-    //     self.torrents.get(id).map(|handle| {
-    //         let handle = handle.lock().await;
-    //         let piece_pool = handle.piece_pool.lock().await;
-    //         piece_pool.get_progress()
-    //     })
-    // }
+    pub async fn shutdown(&mut self) -> Result<()> {
+        let mut first_error = None;
+        for torrent in self.torrents.values_mut() {
+            if let Err(error) = torrent.shutdown().await {
+                first_error.get_or_insert(error);
+            }
+        }
+        self.torrents.clear();
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
 }

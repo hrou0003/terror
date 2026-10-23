@@ -83,12 +83,7 @@ impl Torrent {
     }
 
     pub(crate) fn get_number_of_pieces(&self) -> usize {
-        let number_of_pieces = self.info.length() as f64 / self.info.piece_length.unwrap() as f64;
-        return number_of_pieces.ceil() as usize;
-    }
-
-    fn get_number_of_blocks(&self) -> usize {
-        return self.info.piece_length.unwrap() / (1 << 14);
+        self.info.length().div_ceil(self.info.piece_length.unwrap())
     }
 }
 
@@ -106,31 +101,28 @@ impl Info {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    fn sample() -> Torrent {
+        serde_bencode::from_bytes(include_bytes!("../../test/sample.torrent")).unwrap()
+    }
+
     #[test]
-    fn test_calculate_info_hash() {
-        let mut torrent = Torrent::new("sample.torrent_info".to_string());
-        let info_hash = torrent.calculate_info_hash();
+    fn sample_info_hash_matches_the_wire_dictionary() {
         assert_eq!(
-            info_hash,
-            [
-                0x8e, 0x9e, 0x9f, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e,
-                0x9f, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e
-            ]
+            hex::encode(sample().calculate_info_hash()),
+            "d69f91e6b2ae4c542468d1073a71d4ea13879a7f"
         );
     }
 
     #[test]
-    fn test_get_number_of_pieces() {
-        let torrent = Torrent::new("sample.torrent_info".to_string());
+    fn piece_count_includes_a_partial_final_piece() {
+        let torrent = sample();
         assert_eq!(torrent.get_number_of_pieces(), 3);
-    }
-
-    #[test]
-    fn test_get_number_of_blocks() {
-        let torrent = Torrent::new("sample.torrent_info".to_string());
-        assert_eq!(torrent.get_number_of_blocks(), 2);
+        let mut exact = torrent.clone();
+        exact.info.length = Some(2 * exact.info.piece_length.unwrap());
+        assert_eq!(exact.get_number_of_pieces(), 2);
     }
 }
