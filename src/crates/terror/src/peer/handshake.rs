@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
-use tokio::sync::{Mutex, MutexGuard};
 use tracing::debug;
 
 #[derive(Serialize, Deserialize)]
@@ -105,32 +103,5 @@ impl Handshake {
             info_hash,
             peer_id,
         })
-    }
-
-    pub async fn handshake(
-        info_hash: [u8; 20],
-        stream: &mut TcpStream,
-    ) -> anyhow::Result<Handshake> {
-        let peer_id: [u8; 20] = *b"00112233445566778899";
-        let mut handshake = Handshake::new(info_hash, peer_id);
-        let handshake_bytes = handshake.to_bytes();
-
-        debug!("Send handshake request {}", hex::encode(handshake_bytes));
-        stream.write_all(&handshake_bytes).await?;
-
-        let received_handshake = match Handshake::from_stream(stream).await {
-            Ok(handshake) => handshake,
-            Err(e) => {
-                debug!("Error reading handshake: {:?}", e);
-                return Err(anyhow::anyhow!("Error reading handshake"));
-            }
-        };
-
-        debug!(
-            "Handshake completed on: {}",
-            hex::encode(received_handshake.peer_id)
-        );
-
-        Ok(received_handshake)
     }
 }

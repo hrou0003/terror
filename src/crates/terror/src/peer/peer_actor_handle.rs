@@ -1,69 +1,85 @@
-use crate::metrics::metrics::PeerMetrics;
-use crate::peer::peer::CycleMessage;
-use crate::peer::peer_actor::{PeerActor, PeerMessage};
-use crate::torrent::torrent_downloader::{CompletedTask, DownloadBlock};
-use kanal::{AsyncReceiver, AsyncSender, Receiver};
-use log::error;
-use std::cmp::Ordering;
-use std::net::IpAddr;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::mpsc::{Sender, UnboundedSender};
-use tracing::debug;
-use tracing::field::debug;
+use crate::peer::peer::Peer;
+use crate::peer::peer_actor::{PeerActor, PeerEvent};
+use crate::torrent::torrent_downloader::DownloadBlock;
+use futures_util::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 
-pub struct PeerActorHandle {
+pub(crate) const MAX_IN_FLIGHT: usize = 8;
+
+pub(crate) struct PeerActorHandle {
+    pub(crate) actor_id: usize,
     pub(crate) peer_id: String,
-    pub(crate) sender: AsyncSender<PeerMessage>,
-    pub(crate) metrics: Arc<PeerMetrics>,
-}
-
-impl PartialEq for PeerActorHandle {
-    fn eq(&self, other: &Self) -> bool {
-        self.metrics.eq(&other.metrics)
-    }
-}
-
-impl PartialOrd for PeerActorHandle {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.metrics.partial_cmp(&other.metrics)
-    }
+    pub(crate) sender: mpsc::Sender<DownloadBlock>,
+    pub(crate) ready: bool,
+    pub(crate) in_flight: usize,
+    shutdown: Option<oneshot::Sender<()>>,
+    task: Option<JoinHandle<anyhow::Result<()>>>,
 }
 
 impl PeerActorHandle {
-    pub fn new(
-        peer_id: String,
-        ip_addr: IpAddr,
-        port: u16,
-        info_hash: [u8; 20],
-        completed_task_tx: AsyncSender<CompletedTask>,
+    pub(crate) fn new(
+        peer: Peer,
+        actor_id: usize,
+        events: mpsc::UnboundedSender<PeerEvent>,
     ) -> Self {
-        let (sender, receiver) = kanal::bounded_async(3000);
-        let actor = PeerActor::new(
-            peer_id.clone(),
-            ip_addr,
-            port,
-            info_hash,
-            receiver,
-            completed_task_tx,
-        );
-        tokio::spawn(run_peer_actor(actor));
-
-        let metrics = Arc::new(PeerMetrics::new());
+        let (sender, receiver) = mpsc::channel(MAX_IN_FLIGHT);
+        let (shutdown, cancellation) = oneshot::channel();
+        let peer_id = peer.id.clone();
+        let actor = PeerActor::new(peer, actor_id, receiver, events);
+        let task = tokio::spawn(actor.run(cancellation));
         Self {
+            actor_id,
             peer_id,
             sender,
-            metrics,
+            ready: false,
+            in_flight: 0,
+            shutdown: Some(shutdown),
+            task: Some(task),
         }
+    }
+
+    pub(crate) fn cancel(&mut self) {
+        self.ready = false;
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+    }
+
+    pub(crate) fn poll_join(&mut self, cx: &mut Context<'_>) -> Poll<anyhow::Result<()>> {
+        let Some(task) = self.task.as_mut() else {
+            return Poll::Pending;
+        };
+        match Pin::new(task).poll(cx) {
+            Poll::Ready(result) => {
+                self.task.take();
+                Poll::Ready(
+                    result
+                        .map_err(anyhow::Error::from)
+                        .and_then(|result| result),
+                )
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    pub(crate) async fn join(&mut self) -> anyhow::Result<()> {
+        let Some(task) = self.task.as_mut() else {
+            return Ok(());
+        };
+        let result = task.await;
+        self.task.take();
+        result?
     }
 }
 
-async fn run_peer_actor(mut actor: PeerActor) {
-    loop {
-        let msg = actor.receiver.recv().await;
-        if let Ok(msg) = msg {
-            actor.handle_message(msg).await.expect("TODO: panic message");
-            debug!("Passing message form peer actor handle");
+impl Drop for PeerActorHandle {
+    fn drop(&mut self) {
+        self.cancel();
+        if let Some(task) = &self.task {
+            task.abort();
         }
     }
 }

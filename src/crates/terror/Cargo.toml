@@ -3,14 +3,6 @@ name = "terror"
 version = "0.1.0"
 edition = "2021"
 
-[profile.dev]
-incremental = true
-
-[build]
-rustflags = ["--cfg", "tokio_unstable"]
-
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 tracing = "0.1"
@@ -33,10 +25,7 @@ tokio = { version = "1.23.0", features = ["full", "tracing"] }
 uuid = { version = "1.8.0", features = ["v4"] }
 log = { version = "0.4.21", features = [] }              
 kanal = "0.1.0-pre8"
-actix = "0.13.3"
-actix-rt = "2.5.1"
 rand = "0.9.0-alpha.1"
-console-subscriber = "0.2.0"
 futures = "0.3.30"
 futures-util = "0.3.30"
 tokio-util = "0.7.8"

@@ -1,276 +1,370 @@
-use crate::metrics::metrics::PeerMetrics;
 use crate::peer::handshake::Handshake;
-use crate::peer::peer::{CycleMessage, Peer};
+use crate::peer::peer::Peer;
 use crate::tcp::bittorrent_code::BitTorrentCodec;
 use crate::tcp::message::Message;
 use crate::torrent::torrent_downloader::{CompletedTask, DownloadBlock};
-use anyhow::anyhow;
-use futures_util::{SinkExt, StreamExt};
-use kanal::{AsyncReceiver, AsyncSender, Receiver};
-use std::net::IpAddr;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use anyhow::{anyhow, bail, Context};
+use futures_util::{future::poll_fn, Sink, SinkExt, Stream, StreamExt};
+use std::pin::Pin as Pinned;
+use std::task::Poll;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::{Sender, UnboundedSender};
-use tokio::sync::{oneshot, Mutex, Notify};
-use tokio::task;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::Framed;
-use tracing::debug;
 
-pub struct PeerActor {
+pub(crate) enum PeerEvent {
+    Ready(usize),
+    Completed {
+        actor_id: usize,
+        task: CompletedTask,
+    },
+}
+
+struct PendingRequest {
+    block: DownloadBlock,
+    sent: bool,
+}
+
+pub(crate) struct PeerActor {
     peer: Peer,
-    pub(crate) receiver: AsyncReceiver<PeerMessage>,
-    completed_task_tx: AsyncSender<CompletedTask>,
-    peer_actor_state: PeerActorState,
-    tasks_notify: Arc<Notify>,
-    tasks_count: Arc<AtomicUsize>,
-}
-
-pub enum PeerActorState {
-    Connected {
-        framed: Arc<Mutex<Framed<TcpStream, BitTorrentCodec>>>,
-    },
-    Disconnected,
-}
-
-impl PeerActorState {
-    fn new_connected(stream: TcpStream) -> Self {
-        let framed = Framed::new(stream, BitTorrentCodec);
-        PeerActorState::Connected {
-            framed: Arc::new(Mutex::new(framed)),
-        }
-    }
-
-    fn get_framed(&self) -> Option<Arc<Mutex<Framed<TcpStream, BitTorrentCodec>>>> {
-        match self {
-            PeerActorState::Connected { framed } => Some(Arc::clone(framed)),
-            PeerActorState::Disconnected => None,
-        }
-    }
-}
-
-pub enum PeerMessage {
-    Control(ControlMessage),
-    Data(DataMessage),
-}
-
-pub enum ControlMessage {
-    Connect { respond_to: oneshot::Sender<()> },
-    Listen,
-    Pause,
-}
-
-pub enum DataMessage {
-    Piece {
-        index: usize,
-        begin: usize,
-        length: usize,
-    },
+    actor_id: usize,
+    receiver: mpsc::Receiver<DownloadBlock>,
+    events: mpsc::UnboundedSender<PeerEvent>,
+    pending: Vec<PendingRequest>,
 }
 
 impl PeerActor {
-    pub fn new(
-        peer_id: String,
-        ip_addr: IpAddr,
-        port: u16,
-        info_hash: [u8; 20],
-        receiver: AsyncReceiver<PeerMessage>,
-        completed_task_tx: AsyncSender<CompletedTask>,
+    pub(crate) fn new(
+        peer: Peer,
+        actor_id: usize,
+        receiver: mpsc::Receiver<DownloadBlock>,
+        events: mpsc::UnboundedSender<PeerEvent>,
     ) -> Self {
-        let peer = Peer::new(peer_id, ip_addr, port, info_hash);
-
-        PeerActor {
+        Self {
             peer,
+            actor_id,
             receiver,
-            completed_task_tx: completed_task_tx.clone(),
-            peer_actor_state: PeerActorState::Disconnected,
-            tasks_notify: Arc::new(Notify::new()),
-            tasks_count: Arc::new(AtomicUsize::new(0)),
+            events,
+            pending: Vec::new(),
         }
     }
 
-    pub async fn send_message(&self, index: usize, begin: usize, length: usize) {
-        debug!("attempting to send message");
-        let framed = match self.peer_actor_state.get_framed() {
-            Some(f) => f,
-            None => return,
+    pub(crate) async fn run(mut self, mut shutdown: oneshot::Receiver<()>) -> anyhow::Result<()> {
+        // Cancellation also covers TCP connect, handshake, and initial protocol reads.
+        // Closing an idle mailbox must not wait for a remote peer to answer.
+        let connection = Self::connect(&self.peer);
+        tokio::pin!(connection);
+        let mut framed = loop {
+            tokio::select! {
+                biased;
+                _ = &mut shutdown => return Ok(()),
+                block = self.receiver.recv() => match block {
+                    Some(block) => self.pending.push(PendingRequest { block, sent: false }),
+                    None => return Ok(()),
+                },
+                connected = &mut connection => break connected?,
+            }
         };
-        debug!("stuck here?");
-        let tasks_count = Arc::clone(&self.tasks_count);
-        let tasks_notify = Arc::clone(&self.tasks_notify);
+        self.events
+            .send(PeerEvent::Ready(self.actor_id))
+            .map_err(|_| anyhow!("Peer pool event channel closed"))?;
 
-        let mut framed = framed.lock().await;
-
-        let message = Message::Request {
-            index,
-            begin,
-            length,
-        };
-        if framed.send(message).await.is_ok() {
-            tasks_count.fetch_add(1, Ordering::SeqCst);
-            debug!("send message to peer");
-        }
-        if tasks_count.load(Ordering::SeqCst) > 5 {
-            tasks_notify.notify_one();
-        }
-    }
-
-    pub async fn read_messages(&self) {
-        debug!("read messages");
-        let completed_task_tx = self.completed_task_tx.clone();
-        let framed = match self.peer_actor_state.get_framed() {
-            Some(f) => f,
-            None => return,
-        };
-        let tasks_count = Arc::clone(&self.tasks_count);
-        let tasks_notify = Arc::clone(&self.tasks_notify);
-        let peer_id = self.peer.id.clone();
-
-        task::spawn(async move {
-            loop {
-                if tasks_count.load(Ordering::SeqCst) == 0 {
-                    tasks_notify.notified().await;
-                }
-
-                debug!("am I stuck in the read messages?");
-                let mut framed = framed.lock().await;
-                let message = framed.next().await;
-
-                let peer_id = peer_id.clone();
-
-                match message {
-                    Some(Ok(Message::Piece {
-                        index,
-                        begin,
-                        block,
-                    })) => {
-                        debug!("received piece message from tcp client and sending for forwarding by peer pool");
-                        completed_task_tx
-                            .send(CompletedTask::DownloadedBlock {
-                                peer_id: peer_id.clone(),
-                                download_time: Instant::now(),
-                                piece_index: index,
-                                block_index: (begin / (1 << 14)),
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut shutdown => return Ok(()),
+                block = self.receiver.recv() => match block {
+                    Some(block) => self.pending.push(PendingRequest { block, sent: false }),
+                    None => return Ok(()),
+                },
+                message = poll_fn(|cx| {
+                    // Poll both directions on the same Framed. A pending read never holds
+                    // a socket lock, and write backpressure never prevents reading replies.
+                    for pending in self.pending.iter_mut().filter(|pending| !pending.sent) {
+                        match Pinned::new(&mut framed).poll_ready(cx) {
+                            Poll::Ready(Ok(())) => {
+                                let block = pending.block;
+                                if let Err(error) = Pinned::new(&mut framed).start_send(Message::Request {
+                                    index: block.piece_index, begin: block.begin, length: block.length,
+                                }) {
+                                    return Poll::Ready(Some(Err(error)));
+                                }
+                                pending.sent = true;
+                            }
+                            Poll::Ready(Err(error)) => return Poll::Ready(Some(Err(error))),
+                            Poll::Pending => break,
+                        }
+                    }
+                    if let Poll::Ready(Err(error)) = Pinned::new(&mut framed).poll_flush(cx) {
+                        return Poll::Ready(Some(Err(error)));
+                    }
+                    Pinned::new(&mut framed).poll_next(cx)
+                }) => match message {
+                    Some(Ok(Message::Piece { index, begin, block })) => {
+                        let position = self.pending.iter().position(|pending| {
+                            pending.sent && pending.block.piece_index == index && pending.block.begin == begin
+                        }).ok_or_else(|| anyhow!("Peer {} returned an unrequested block {index}:{begin}", self.peer.id))?;
+                        if block.len() != self.pending[position].block.length {
+                            bail!("Peer {} returned an incorrect block length", self.peer.id);
+                        }
+                        let request = self.pending.swap_remove(position).block;
+                        self.events.send(PeerEvent::Completed {
+                            actor_id: self.actor_id,
+                            task: CompletedTask::DownloadedBlock {
+                                piece_index: request.piece_index,
+                                block_index: request.block_index,
                                 bytes: block,
-                            })
-                            .await
-                            .unwrap();
-                        tasks_count.fetch_sub(1, Ordering::SeqCst);
-                        debug!("am I getting stuck here??");
+                            },
+                        }).map_err(|_| anyhow!("Peer pool event channel closed"))?;
                     }
-                    Some(Ok(_)) => {}
-                    Some(Err(_)) | None => {
-                        completed_task_tx
-                            .send(CompletedTask::FailedBlock {
-                                peer_id: peer_id,
-                                piece_index: 0,
-                                block_index: 0,
-                            })
-                            .await
-                            .unwrap();
-                        tasks_count.fetch_sub(1, Ordering::SeqCst);
-                        debug!("failed message from tcp client");
-                        break;
-                    }
+                    Some(Ok(_)) => {},
+                    Some(Err(error)) => return Err(error).context("Reading peer message"),
+                    None => bail!("Peer {} disconnected", self.peer.id),
                 }
             }
+        }
+    }
+
+    async fn connect(peer: &Peer) -> anyhow::Result<Framed<TcpStream, BitTorrentCodec>> {
+        let mut stream = TcpStream::connect((peer.ip_addr, peer.port))
+            .await
+            .with_context(|| format!("Connecting to peer {}", peer.id))?;
+        let mut handshake = Handshake::new(peer.info_hash, *b"00112233445566778899");
+        stream.write_all(&handshake.to_bytes()).await?;
+        Handshake::from_stream(&mut stream).await?;
+        let mut framed = Framed::new(stream, BitTorrentCodec);
+        match framed.next().await.transpose()? {
+            Some(Message::Bitfield(_)) => framed.send(Message::Interested).await?,
+            _ => bail!("Peer {} did not send a bitfield", peer.id),
+        }
+        match framed.next().await.transpose()? {
+            Some(Message::Unchoke) => Ok(framed),
+            _ => bail!("Peer {} did not unchoke the connection", peer.id),
+        }
+    }
+
+    fn fail(&self, block: DownloadBlock) {
+        let _ = self.events.send(PeerEvent::Completed {
+            actor_id: self.actor_id,
+            task: CompletedTask::FailedBlock {
+                piece_index: block.piece_index,
+                block_index: block.block_index,
+            },
         });
     }
+}
 
-    pub(crate) async fn handle_message(&mut self, msg: PeerMessage) -> anyhow::Result<()> {
-        match msg {
-            PeerMessage::Control(control) => match control {
-                ControlMessage::Connect { respond_to } => {
-                    let _ = respond_to.send(());
-                }
-                ControlMessage::Listen => {
-                    let _ = self.connect().await;
-                    self.read_messages().await;
-                }
-                ControlMessage::Pause => {}
-            },
-            PeerMessage::Data(data) => match data {
-                DataMessage::Piece {
-                    index,
-                    begin,
-                    length,
-                } => {
-                    debug!("Received data piece message");
-                    self.send_message(index, begin, length).await
-                }
-            },
+impl Drop for PeerActor {
+    fn drop(&mut self) {
+        // Close before draining so no sender can enqueue a request after this drain.
+        self.receiver.close();
+        for request in &self.pending {
+            self.fail(request.block);
         }
-        Ok(())
+        while let Ok(block) = self.receiver.try_recv() {
+            self.fail(block);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::peer::peer_actor_handle::PeerActorHandle;
+    use bytes::Bytes;
+    use std::future::Future;
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+
+    async fn bounded<T>(future: impl Future<Output = T>) -> T {
+        tokio::time::timeout(Duration::from_secs(5), future)
+            .await
+            .expect("local peer timed out")
     }
 
-    async fn connect(&mut self) -> anyhow::Result<()> {
-        match &self.peer_actor_state {
-            PeerActorState::Connected { .. } => {
-                debug!("Peer {} is already connected", self.peer.id);
-                Ok(())
-            }
-            PeerActorState::Disconnected => {
-                let mut stream = TcpStream::connect((self.peer.ip_addr, self.peer.port)).await?;
+    fn peer(listener: &TcpListener) -> Peer {
+        let address = listener.local_addr().unwrap();
+        Peer::new("local-peer".into(), address.ip(), address.port(), [3; 20])
+    }
 
-                // Perform handshake manually
-                let mut handshake = Handshake::new(self.peer.info_hash, *b"00112233445566778899");
-                let handshake_bytes = handshake.to_bytes();
-                stream.write_all(&handshake_bytes).await?;
+    async fn accept_ready(listener: &TcpListener) -> Framed<TcpStream, BitTorrentCodec> {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut handshake = [0; 68];
+        stream.read_exact(&mut handshake).await.unwrap();
+        stream.write_all(&handshake).await.unwrap();
+        let mut framed = Framed::new(stream, BitTorrentCodec);
+        framed
+            .send(Message::Bitfield(Bytes::from_static(&[0xff])))
+            .await
+            .unwrap();
+        assert_eq!(framed.next().await.unwrap().unwrap(), Message::Interested);
+        framed.send(Message::Unchoke).await.unwrap();
+        framed
+    }
 
-                let received_handshake = Handshake::from_stream(&mut stream).await?;
-                debug!(
-                    "Handshake completed on: {}",
-                    hex::encode(received_handshake.peer_id)
-                );
+    async fn connected() -> (
+        PeerActorHandle,
+        Framed<TcpStream, BitTorrentCodec>,
+        mpsc::UnboundedReceiver<PeerEvent>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        let handle = PeerActorHandle::new(peer(&listener), 4, events_tx);
+        let framed = accept_ready(&listener).await;
+        assert!(matches!(events.recv().await, Some(PeerEvent::Ready(4))));
+        (handle, framed, events)
+    }
 
-                // Switch to BitTorrent codec
-                let mut framed = Framed::new(stream, BitTorrentCodec);
-
-                // Expect bitfield
-                match framed.next().await {
-                    Some(Ok(Message::Bitfield { .. })) => {
-                        framed.send(Message::Interested).await?;
-                    }
-                    _ => return Err(anyhow!("Didn't receive bitfield")),
-                }
-
-                // Expect unchoke
-                match framed.next().await {
-                    Some(Ok(Message::Unchoke)) => {
-                        self.peer_actor_state = PeerActorState::Connected {
-                            framed: Arc::new(Mutex::new(framed)),
-                        };
-                        Ok(())
-                    }
-                    Some(Ok(_)) => Err(anyhow!("Unexpected message")),
-                    Some(Err(e)) => {
-                        debug!("Error reading message: {}", e);
-                        Err(anyhow!("Couldn't connect"))
-                    }
-                    None => Err(anyhow!("Connection closed unexpectedly")),
-                }
-            }
+    fn block(piece_index: usize, block_index: usize, begin: usize) -> DownloadBlock {
+        DownloadBlock {
+            piece_index,
+            block_index,
+            begin,
+            length: 4,
         }
     }
 
-    pub async fn get_stream(&mut self) -> anyhow::Result<()> {
-        match &self.peer_actor_state {
-            PeerActorState::Connected { .. } => Ok(()),
-            PeerActorState::Disconnected => {
-                debug!("Peer is not connected");
-                debug!("Reconnecting");
-                if let Ok(_) = self.connect().await {
-                    debug!("Reconnected");
-                    Ok(())
-                } else {
-                    debug!("Failed to reconnect");
-                    debug!("Broken peer");
-                    Err(anyhow!("Broken peer"))
+    #[tokio::test]
+    async fn reader_does_not_block_the_next_request() {
+        bounded(async {
+            let (mut handle, mut server, mut events) = connected().await;
+            handle.sender.send(block(7, 2, 8)).await.unwrap();
+            assert_eq!(
+                server.next().await.unwrap().unwrap(),
+                Message::Request {
+                    index: 7,
+                    begin: 8,
+                    length: 4
+                }
+            );
+            // Do not answer the first request until the second arrives.
+            handle.sender.send(block(7, 3, 12)).await.unwrap();
+            assert_eq!(
+                server.next().await.unwrap().unwrap(),
+                Message::Request {
+                    index: 7,
+                    begin: 12,
+                    length: 4
+                }
+            );
+            server
+                .send(Message::Piece {
+                    index: 7,
+                    begin: 12,
+                    block: Bytes::from_static(b"data"),
+                })
+                .await
+                .unwrap();
+            assert!(matches!(
+                events.recv().await,
+                Some(PeerEvent::Completed {
+                    task: CompletedTask::DownloadedBlock {
+                        piece_index: 7,
+                        block_index: 3,
+                        ..
+                    },
+                    ..
+                })
+            ));
+            handle.cancel();
+            handle.join().await.unwrap();
+            assert!(server.next().await.is_none());
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn closed_mailbox_exits_while_waiting_for_a_handshake() {
+        bounded(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (sender, receiver) = mpsc::channel(1);
+            let (events, _events_rx) = mpsc::unbounded_channel();
+            let (_shutdown, cancellation) = oneshot::channel();
+            let actor = PeerActor::new(peer(&listener), 0, receiver, events);
+            let task = tokio::spawn(actor.run(cancellation));
+            let (mut server, _) = listener.accept().await.unwrap();
+            let mut handshake = [0; 68];
+            server.read_exact(&mut handshake).await.unwrap();
+            drop(sender);
+            task.await.unwrap().unwrap();
+            assert_eq!(server.read(&mut [0]).await.unwrap(), 0);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_interrupts_connection_handshake() {
+        bounded(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (events, _events_rx) = mpsc::unbounded_channel();
+            let mut handle = PeerActorHandle::new(peer(&listener), 0, events);
+            let (mut server, _) = listener.accept().await.unwrap();
+            let mut handshake = [0; 68];
+            server.read_exact(&mut handshake).await.unwrap();
+            handle.cancel();
+            handle.join().await.unwrap();
+            assert_eq!(server.read(&mut [0]).await.unwrap(), 0);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_interrupts_an_idle_read() {
+        bounded(async {
+            let (mut handle, mut server, _events) = connected().await;
+            handle.cancel();
+            handle.join().await.unwrap();
+            assert!(server.next().await.is_none());
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn disconnect_reports_each_actual_request_identity() {
+        bounded(async {
+            let (mut handle, mut server, mut events) = connected().await;
+            handle.sender.send(block(11, 9, 36)).await.unwrap();
+            handle.sender.send(block(12, 5, 20)).await.unwrap();
+            for _ in 0..2 {
+                assert!(matches!(
+                    server.next().await.unwrap().unwrap(),
+                    Message::Request { .. }
+                ));
+            }
+            drop(server);
+            assert!(handle.join().await.is_err());
+            let mut failures = Vec::new();
+            for _ in 0..2 {
+                match events.recv().await.unwrap() {
+                    PeerEvent::Completed {
+                        task:
+                            CompletedTask::FailedBlock {
+                                piece_index,
+                                block_index,
+                            },
+                        actor_id,
+                    } => {
+                        assert_eq!(actor_id, 4);
+                        failures.push((piece_index, block_index));
+                    }
+                    _ => panic!("expected a failure for an actual pending request"),
                 }
             }
-        }
+            failures.sort_unstable();
+            assert_eq!(failures, [(11, 9), (12, 5)]);
+            assert!(events.try_recv().is_err());
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn dropping_a_handle_aborts_its_socket_task() {
+        bounded(async {
+            let (handle, mut server, _events) = connected().await;
+            drop(handle);
+            assert!(server.next().await.is_none());
+        })
+        .await;
     }
 }
